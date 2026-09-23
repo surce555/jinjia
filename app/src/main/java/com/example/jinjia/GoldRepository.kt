@@ -292,4 +292,59 @@ object GoldRepository {
 
         return list
     }
+
+    // ==================== 数据源 A：日内分时高频走势 ====================
+
+    /**
+     * 拉取指定品种的日内高频分时走势数据
+     * URL: https://jin.20021002.xyz/api.php?action=chart&type={code}
+     */
+    suspend fun fetchIntradayChart(code: String): List<ChartPoint> = withContext(Dispatchers.IO) {
+        val cleanCode = if (code.startsWith("realtime_")) code.removePrefix("realtime_") else code
+        val safeCode = when (cleanCode.lowercase()) {
+            "icbc", "zs", "ms", "cgb", "cib", "jd", "gj" -> cleanCode
+            else -> "icbc" // 对大盘、金店等品种以工商银行基准分时走势兜底
+        }
+        val url = "https://jin.20021002.xyz/api.php?action=chart&type=$safeCode"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "fetchIntradayChart HTTP error: ${response.code}")
+                return@withContext emptyList()
+            }
+
+            val bodyString = response.body?.string() ?: return@withContext emptyList()
+            val root = JSONObject(bodyString)
+            val dataArray = root.optJSONArray("data") ?: return@withContext emptyList()
+            val list = mutableListOf<ChartPoint>()
+            for (i in 0 until dataArray.length()) {
+                val obj = dataArray.optJSONObject(i) ?: continue
+                val t = obj.optLong("t", 0L)
+                val p = obj.optDouble("p", 0.0)
+                if (t > 0 && p > 0.0) {
+                    list.add(ChartPoint(t, p))
+                }
+            }
+            return@withContext list
+        } catch (t: Throwable) {
+            Log.e(TAG, "fetchIntradayChart failed for $code: ${t.message}", t)
+            return@withContext emptyList()
+        }
+    }
 }
+
+/**
+ * 分时走势单点数据模型
+ */
+data class ChartPoint(
+    val timestamp: Long,
+    val price: Double
+)
+

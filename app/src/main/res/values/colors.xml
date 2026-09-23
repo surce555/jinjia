@@ -1,12 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="gold_primary">#D4AF37</color>
-    <color name="gold_primary_dark">#AA820A</color>
-    <color name="gold_accent">#FFD700</color>
-    <color name="gold_bg_light">#FFFDF7</color>
-    <color name="status_green">#2E7D32</color>
-    <color name="status_red">#C62828</color>
-    <color name="text_primary">#212121</color>
-    <color name="text_secondary">#666666</color>
-    <color name="white">#FFFFFF</color>
+    <!-- 奢雅香槟金核心品牌色系 -->
+    <color name="gold_primary">#C5A059</color>
+    <color name="gold_primary_dark">#96742F</color>
+    <color name="gold_accent">#DFBA73</color>
+    <color name="gold_light_tint">#F9F5EC</color>
+
+    <!-- 背景与卡片色系 -->
+    <color name="gold_bg_light">#F6F8FA</color>
     <color name="card_background">#FFFFFF</color>
+    <color name="card_stroke">#E5E7EB</color>
+    <color name="card_stroke_focused">#C5A059</color>
+
+    <!-- 文本色系 -->
+    <color name="text_primary">#1F2937</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_muted">#9CA3AF</color>
+    <color name="white">#FFFFFF</color>
+
+    <!-- 状态指示胶囊色系 -->
+    <color name="status_green">#10B981</color>
+    <color name="status_green_bg">#ECFDF5</color>
+    <color name="status_green_stroke">#A7F3D0</color>
+    <color name="status_red">#EF4444</color>
+    <color name="status_red_bg">#FEF2F2</color>
+    <color name="status_red_stroke">#FECACA</color>
+    <color name="status_gray_bg">#F3F4F6</color>
+    <color name="status_gray_stroke">#E5E7EB</color>
+
+    <!-- AI 专属科技质感深空黑与渐变 -->
+    <color name="ai_btn_bg">#1F2937</color>
+    <color name="ai_btn_pressed">#111827</color>
+    <color name="ai_gold_accent">#F3BA2F</color>
 </resources>

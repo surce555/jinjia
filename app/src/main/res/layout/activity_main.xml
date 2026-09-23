@@ -11,7 +11,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="12dp">
+        android:padding="14dp">
 
         <!-- 顶部盯盘核心仪表盘卡片 -->
         <com.google.android.material.card.MaterialCardView
@@ -19,15 +19,18 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="3dp">
+            app:cardCornerRadius="18dp"
+            app:cardElevation="2dp"
+            app:strokeColor="@color/card_stroke"
+            app:strokeWidth="1dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="18dp">
 
+                <!-- 标的标题与状态胶囊 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -35,8 +38,8 @@
                     android:orientation="horizontal">
 
                     <ImageView
-                        android:layout_width="32dp"
-                        android:layout_height="32dp"
+                        android:layout_width="28dp"
+                        android:layout_height="28dp"
                         android:contentDescription="@string/app_name"
                         android:src="@drawable/ic_gold" />
 
@@ -48,136 +51,193 @@
                         android:layout_weight="1"
                         android:ellipsize="end"
                         android:maxLines="1"
-                        android:text="今日金价 (大盘)"
+                        android:text="[实时] 工商银行"
                         android:textColor="@color/text_primary"
                         android:textSize="18sp"
                         android:textStyle="bold" />
 
+                    <!-- 状态指示胶囊 Badge -->
                     <TextView
                         android:id="@+id/tvServiceStatus"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="未运行"
+                        android:background="@drawable/bg_status_chip_red"
+                        android:paddingHorizontal="10dp"
+                        android:paddingVertical="4dp"
+                        android:text="● 未运行"
                         android:textColor="@color/status_red"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <TextView
-                    android:id="@+id/tvTargetPrice"
-                    android:layout_width="wrap_content"
+                <!-- 大字号主价格看板与浮动角标 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="--.-- 元/克"
-                    android:textColor="@color/gold_primary_dark"
-                    android:textSize="32sp"
-                    android:textStyle="bold" />
+                    android:layout_marginTop="12dp"
+                    android:gravity="bottom"
+                    android:orientation="horizontal">
 
+                    <TextView
+                        android:id="@+id/tvTargetPrice"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="¥ 932.33 /克"
+                        android:textColor="@color/text_primary"
+                        android:textSize="36sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvPriceBadge"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="8dp"
+                        android:layout_marginBottom="6dp"
+                        android:background="@drawable/bg_price_badge"
+                        android:paddingHorizontal="6dp"
+                        android:paddingVertical="2dp"
+                        android:text="高频实盘"
+                        android:textColor="@color/gold_primary_dark"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <!-- 极细分割线 -->
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
-                    android:layout_marginVertical="10dp"
-                    android:background="#EEEEEE" />
+                    android:layout_marginVertical="14dp"
+                    android:background="#F3F4F6" />
 
+                <!-- 监控阈值、刷新频率与更新时间指标网格 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="horizontal">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="预警阈值："
-                        android:textColor="@color/text_secondary"
-                        android:textSize="13sp" />
-
-                    <TextView
-                        android:id="@+id/tvCurrentThreshold"
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="未设置"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
+                        android:orientation="vertical">
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="刷新频率："
-                        android:textColor="@color/text_secondary"
-                        android:textSize="13sp" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="预警阈值"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
 
-                    <TextView
-                        android:id="@+id/tvCurrentInterval"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="5.0 分钟"
-                        android:textColor="@color/text_primary"
-                        android:textSize="13sp" />
-                </LinearLayout>
+                        <TextView
+                            android:id="@+id/tvCurrentThreshold"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="未设置"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="更新时间："
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp" />
-
-                    <TextView
-                        android:id="@+id/tvUpdateTime"
+                    <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="尚未拉取"
-                        android:textColor="@color/text_secondary"
-                        android:textSize="12sp" />
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="轮询频率"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/tvCurrentInterval"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:text="5.0 分钟"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1.2"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="最新行情更新"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="11sp" />
+
+                        <TextView
+                            android:id="@+id/tvUpdateTime"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="2dp"
+                            android:ellipsize="end"
+                            android:maxLines="1"
+                            android:text="尚未拉取"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="13sp" />
+                    </LinearLayout>
                 </LinearLayout>
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 监控设置与操作卡片 -->
+        <!-- 监控设置与 AI 辅助分析核心操作卡片 -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardControl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="14dp"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="3dp">
+            app:cardCornerRadius="18dp"
+            app:cardElevation="2dp"
+            app:strokeColor="@color/card_stroke"
+            app:strokeWidth="1dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="18dp">
 
-                <!-- 监控标的选择下拉框 -->
+                <!-- 标题与标的选择 -->
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="选择盯盘标的："
-                    android:textColor="@color/text_secondary"
-                    android:textSize="13sp" />
+                    android:text="盯盘标的选择"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
 
-                <Spinner
-                    android:id="@+id/spTarget"
+                <!-- 现代化外框包裹的标的下拉框 -->
+                <FrameLayout
                     android:layout_width="match_parent"
                     android:layout_height="48dp"
-                    android:layout_marginTop="4dp"
-                    android:background="@android:drawable/btn_dropdown"
-                    android:spinnerMode="dialog" />
+                    android:layout_marginTop="6dp"
+                    android:background="@drawable/bg_spinner_outline"
+                    android:paddingHorizontal="4dp">
 
-                <!-- 预警阈值与频率设置 -->
+                    <Spinner
+                        android:id="@+id/spTarget"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent"
+                        android:spinnerMode="dialog" />
+                </FrameLayout>
+
+                <!-- 预警阈值与频率设置（对齐现代浮动输入框） -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
+                    android:layout_marginTop="12dp"
                     android:orientation="horizontal">
 
                     <com.google.android.material.textfield.TextInputLayout
@@ -187,7 +247,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:hint="预警阈值(元/克)"
-                        app:boxStrokeColor="@color/gold_primary">
+                        app:boxCornerRadiusBottomEnd="12dp"
+                        app:boxCornerRadiusBottomStart="12dp"
+                        app:boxCornerRadiusTopEnd="12dp"
+                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxStrokeColor="@color/gold_primary"
+                        app:hintTextColor="@color/gold_primary_dark">
 
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/etThreshold"
@@ -195,33 +260,56 @@
                             android:layout_height="wrap_content"
                             android:inputType="numberDecimal"
                             android:singleLine="true"
-                            android:text="930.00" />
+                            android:text="930.00"
+                            android:textColor="@color/text_primary" />
                     </com.google.android.material.textfield.TextInputLayout>
 
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="10dp"
                         android:layout_weight="1"
                         android:orientation="vertical">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="刷新频率："
+                            android:text="轮询间隔"
                             android:textColor="@color/text_secondary"
-                            android:textSize="12sp" />
+                            android:textSize="11sp" />
 
-                        <Spinner
-                            android:id="@+id/spInterval"
+                        <FrameLayout
                             android:layout_width="match_parent"
-                            android:layout_height="48dp"
+                            android:layout_height="52dp"
                             android:layout_marginTop="4dp"
-                            android:background="@android:drawable/btn_dropdown" />
+                            android:background="@drawable/bg_spinner_outline"
+                            android:paddingHorizontal="4dp">
+
+                            <Spinner
+                                android:id="@+id/spInterval"
+                                android:layout_width="match_parent"
+                                android:layout_height="match_parent" />
+                        </FrameLayout>
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 操作按钮组 -->
+                <!-- 核心 AI 辅助功能：一键复制走势给 AI 分析 -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnCopyAiPrompt"
+                    android:layout_width="match_parent"
+                    android:layout_height="50dp"
+                    android:layout_marginTop="16dp"
+                    android:backgroundTint="@color/ai_btn_bg"
+                    android:text="🤖 复制走势给 AI 分析"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    app:cornerRadius="25dp"
+                    app:elevation="2dp"
+                    app:iconGravity="textStart"
+                    app:rippleColor="#33FFFFFF" />
+
+                <!-- 操作按钮组（胶囊药丸按钮设计） -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
@@ -237,7 +325,10 @@
                         android:backgroundTint="@color/gold_primary"
                         android:text="启动监控"
                         android:textColor="@color/white"
-                        app:cornerRadius="10dp" />
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="24dp"
+                        app:elevation="2dp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnStop"
@@ -246,11 +337,14 @@
                         android:layout_marginStart="6dp"
                         android:layout_marginEnd="6dp"
                         android:layout_weight="1"
-                        android:backgroundTint="#888888"
+                        android:backgroundTint="#E5E7EB"
                         android:enabled="false"
                         android:text="停止监控"
-                        android:textColor="@color/white"
-                        app:cornerRadius="10dp" />
+                        android:textColor="@color/text_secondary"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="24dp"
+                        app:elevation="0dp" />
 
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnSettings"
@@ -259,10 +353,13 @@
                         android:layout_height="48dp"
                         android:text="展示管理"
                         android:textColor="@color/gold_primary_dark"
-                        app:cornerRadius="10dp"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="24dp"
                         app:strokeColor="@color/gold_primary"
                         app:strokeWidth="1dp" />
                 </LinearLayout>
+
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -271,10 +368,12 @@
             android:id="@+id/cardMarket"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="14dp"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="16dp"
-            app:cardElevation="3dp">
+            app:cardCornerRadius="18dp"
+            app:cardElevation="2dp"
+            app:strokeColor="@color/card_stroke"
+            app:strokeWidth="1dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -286,6 +385,7 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     app:tabIndicatorColor="@color/gold_primary"
+                    app:tabIndicatorHeight="3dp"
                     app:tabMode="auto"
                     app:tabSelectedTextColor="@color/gold_primary_dark"
                     app:tabTextColor="@color/text_secondary" />

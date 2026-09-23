@@ -1,6 +1,8 @@
 package com.example.jinjia
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -134,8 +136,9 @@ class MainActivity : AppCompatActivity() {
     private fun fetchGoldDataImmediately() {
         val currentState = GoldPriceService.monitorState.value
         if (!currentState.isRunning) {
-            binding.tvServiceStatus.text = "正在同步双数据源行情..."
-            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.gold_primary_dark))
+            binding.tvServiceStatus.text = "● 同步行情中..."
+            binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_gray)
+            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
         }
 
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -217,8 +220,9 @@ class MainActivity : AppCompatActivity() {
 
                     val running = GoldPriceService.monitorState.value.isRunning
                     if (!running) {
-                        binding.tvServiceStatus.text = "已更新最新行情 (${combined.size}项)"
-                        binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                        binding.tvServiceStatus.text = "● 行情已更新 (${combined.size}项)"
+                        binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_gray)
+                        binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
                     }
                 }
             } catch (t: Throwable) {
@@ -226,7 +230,8 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     val running = GoldPriceService.monitorState.value.isRunning
                     if (!running) {
-                        binding.tvServiceStatus.text = "拉取提示: ${t.message}"
+                        binding.tvServiceStatus.text = "● 拉取提示: ${t.message}"
+                        binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_red)
                         binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
                     }
                     Toast.makeText(this@MainActivity, "行情同步提示: ${t.message}", Toast.LENGTH_SHORT).show()
@@ -312,6 +317,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnSettings.setOnClickListener {
             showDisplaySettingsDialog()
         }
+
+        // 核心 AI 辅助分析：一键复制走势给 AI 分析
+        binding.btnCopyAiPrompt.setOnClickListener {
+            copyAiAnalysisPrompt()
+        }
     }
 
     /**
@@ -336,6 +346,15 @@ class MainActivity : AppCompatActivity() {
     private fun bindTopCardItem(item: GoldItem) {
         binding.tvCurrentTargetTitle.text = item.displayName
         binding.tvTargetPrice.text = item.priceDisplay
+
+        binding.tvPriceBadge.text = when (item.category) {
+            GoldDataParser.CAT_REALTIME -> "高频实盘"
+            GoldDataParser.CAT_BANKS -> "银行金条"
+            GoldDataParser.CAT_STORES -> "品牌金价"
+            GoldDataParser.CAT_METALS -> "大盘现货"
+            GoldDataParser.CAT_RECYCLE -> "回收指导"
+            else -> "实盘参考"
+        }
     }
 
     /**
@@ -427,6 +446,98 @@ class MainActivity : AppCompatActivity() {
         } else {
             binding.tvEmptyList.visibility = View.GONE
         }
+    }
+
+    /**
+     * 核心功能：异步拉取日内走势并一键组装复制专业 AI 量化分析 Prompt
+     */
+    private fun copyAiAnalysisPrompt() {
+        val item = selectedTargetItem ?: allTargetsList.firstOrNull() ?: return
+        binding.btnCopyAiPrompt.isEnabled = false
+        binding.btnCopyAiPrompt.text = "⏳ 正在抓取走势数据..."
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // 1. 获取日内走势分时数据
+                val chartPoints = GoldRepository.fetchIntradayChart(item.id)
+                val sampledPoints = sampleChartPoints(chartPoints, targetCount = 36)
+
+                val highPrice = if (chartPoints.isNotEmpty()) chartPoints.maxOf { it.price } else item.price
+                val lowPrice = if (chartPoints.isNotEmpty()) chartPoints.minOf { it.price } else item.price
+                val latestPrice = if (chartPoints.isNotEmpty()) chartPoints.last().price else item.price
+                val amplitude = if (lowPrice > 0) ((highPrice - lowPrice) / lowPrice * 100.0) else 0.0
+
+                val timeSdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+                val dateSdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                val currentTime = dateSdf.format(Date())
+
+                // 2. 组装分时抽样数据清单 (时间 -> 价格)
+                val sbPoints = StringBuilder()
+                if (sampledPoints.isNotEmpty()) {
+                    sampledPoints.forEach { pt ->
+                        val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
+                        val timeStr = timeSdf.format(Date(tMillis))
+                        sbPoints.append("- %s: %.2f %s\n".format(timeStr, pt.price, item.unit))
+                    }
+                } else {
+                    sbPoints.append("- 当前即时报价: %.2f %s\n".format(item.price, item.unit))
+                }
+
+                // 3. 构造专业量化专家提示词
+                val prompt = """
+你是一名拥有15年经验的贵金属量化交易专家。请根据以下我刚从实盘抓取的【${item.displayName}】今日高频分时走势数据，进行专业技术面剖析与行情预测：
+
+【盘口概况】
+- 标的名称：${item.displayName}
+- 当前最新价：%.2f %s
+- 日内最高价：%.2f %s
+- 日内最低价：%.2f %s
+- 日内振幅：%.2f%%
+- 数据更新时间：$currentTime
+
+【日内分时抽样数据 (时间 -> 价格)】
+${sbPoints.toString().trimEnd()}
+
+【请从以下 4 个维度给出深度分析报告】：
+1. 短期均线与动量：当前处于拉升、阴跌还是窄幅蓄势震荡？
+2. 关键点位研判：测算日内关键的支撑位（买点）与阻力位（压力位）。
+3. 盘口多空情绪与风险评估：是否存在诱多/诱空或加速见顶信号？
+4. 具体实操策略建议：给出明确的激进/稳健做单点位、止损防守位与止盈目标。
+                """.trimIndent().format(latestPrice, item.unit, highPrice, item.unit, lowPrice, item.unit, amplitude)
+
+                withContext(Dispatchers.Main) {
+                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText("Gold AI Analysis Prompt", prompt)
+                    clipboard.setPrimaryClip(clip)
+
+                    binding.btnCopyAiPrompt.isEnabled = true
+                    binding.btnCopyAiPrompt.text = "🤖 复制走势给 AI 分析"
+                    Toast.makeText(this@MainActivity, "已生成专业AI分析提示词，直接去对话框粘贴即可！", Toast.LENGTH_LONG).show()
+                }
+            } catch (t: Throwable) {
+                Log.e("MainActivity", "copyAiAnalysisPrompt error: ${t.message}", t)
+                withContext(Dispatchers.Main) {
+                    binding.btnCopyAiPrompt.isEnabled = true
+                    binding.btnCopyAiPrompt.text = "🤖 复制走势给 AI 分析"
+                    Toast.makeText(this@MainActivity, "走势拉取提示: ${t.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    /**
+     * 对高频走势点进行均匀抽样（提取 30~50 个关键点，保留开盘、收盘、全天极值）
+     */
+    private fun sampleChartPoints(points: List<ChartPoint>, targetCount: Int = 36): List<ChartPoint> {
+        if (points.size <= targetCount) return points
+        val result = mutableListOf<ChartPoint>()
+        val step = points.size.toDouble() / (targetCount - 1)
+        for (i in 0 until targetCount - 1) {
+            val index = (i * step).toInt().coerceIn(0, points.size - 1)
+            result.add(points[index])
+        }
+        result.add(points.last())
+        return result
     }
 
     /**
@@ -595,13 +706,15 @@ class MainActivity : AppCompatActivity() {
         binding.spInterval.isEnabled = !state.isRunning
         binding.spTarget.isEnabled = !state.isRunning
 
-        // 2. 状态标签
+        // 2. 状态胶囊 Badge 展现
         if (state.isRunning) {
-            binding.tvServiceStatus.text = "监控中 (%.1fm 轮询)".format(state.intervalMinutes)
+            binding.tvServiceStatus.text = "● 监控中 (%.1fm)".format(state.intervalMinutes)
+            binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_green)
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
         } else {
-            if (binding.tvServiceStatus.text == "未运行" || binding.tvServiceStatus.text == "已停止") {
-                binding.tvServiceStatus.text = state.statusMessage
+            if (binding.tvServiceStatus.text.contains("未运行") || binding.tvServiceStatus.text.contains("已停止")) {
+                binding.tvServiceStatus.text = "● " + state.statusMessage
+                binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_red)
                 binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
             }
         }
