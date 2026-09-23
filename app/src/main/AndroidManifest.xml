@@ -5,6 +5,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- 唤醒锁权限（用于 Doze 休眠防挂起及告警亮屏） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- 前台服务权限及 Android 14+ 数据同步类型声明 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

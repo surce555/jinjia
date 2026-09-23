@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -84,6 +85,10 @@ class GoldPriceService : Service() {
 
     private val notificationManager by lazy {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    }
+
+    private val powerManager by lazy {
+        getSystemService(Context.POWER_SERVICE) as PowerManager
     }
 
     // 告警状态机标志位（边缘触发）
@@ -161,107 +166,124 @@ class GoldPriceService : Service() {
 
     /**
      * 核心业务：拉取金价并进行双接口主备容错与判定
+     * 在休眠/熄屏状态下，获取 PARTIAL_WAKE_LOCK 保障 CPU 唤醒完成网络拉取
      */
     private suspend fun fetchPriceAndEvaluate() {
-        var fetchedPrice: Double? = null
-        var fetchedTime: Long = System.currentTimeMillis()
-        var sourceName = "京东金融"
-        var lastError: String? = null
-
-        // 1. 首选尝试京东金融接口
+        val wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "Jinjia:NetworkWakeLock"
+        )
         try {
-            val jdRequest = Request.Builder()
-                .url(JD_API_URL)
-                .header("User-Agent", BROWSER_UA)
-                .header("Accept", "application/json, text/plain, */*")
-                .header("Referer", "https://m.jdjygold.com/")
-                .get()
-                .build()
+            wakeLock.acquire(30_000L) // 30 秒超时保护，防止异常永久持有
 
-            val response = withContext(Dispatchers.IO) {
-                okHttpClient.newCall(jdRequest).execute()
-            }
+            var fetchedPrice: Double? = null
+            var fetchedTime: Long = System.currentTimeMillis()
+            var sourceName = "京东金融"
+            var lastError: String? = null
 
-            if (response.isSuccessful) {
-                val body = response.body?.string()
-                if (!body.isNullOrEmpty()) {
-                    val parsed = parseJdResponse(body)
-                    if (parsed != null) {
-                        fetchedPrice = parsed.first
-                        fetchedTime = parsed.second
-                        sourceName = "京东金融"
-                        Log.i(TAG, "Successfully fetched price from JD: $fetchedPrice")
-                    } else {
-                        lastError = "京东数据字段解析为空"
-                    }
-                } else {
-                    lastError = "京东返回空内容"
-                }
-            } else {
-                lastError = "京东返回 HTTP ${response.code}"
-            }
-        } catch (e: Exception) {
-            val err = formatException(e)
-            Log.e(TAG, "JD API failed: $err", e)
-            lastError = "京东失败($err)"
-        }
-
-        // 2. 若京东接口失败，自动切换新浪黄金现货备用接口
-        if (fetchedPrice == null) {
+            // 1. 首选尝试京东金融接口
             try {
-                Log.w(TAG, "Switching to fallback Sina gold API...")
-                val sinaRequest = Request.Builder()
-                    .url(SINA_API_URL)
+                val jdRequest = Request.Builder()
+                    .url(JD_API_URL)
                     .header("User-Agent", BROWSER_UA)
-                    .header("Accept", "*/*")
-                    .header("Referer", "https://finance.sina.com.cn")
+                    .header("Accept", "application/json, text/plain, */*")
+                    .header("Referer", "https://m.jdjygold.com/")
                     .get()
                     .build()
 
                 val response = withContext(Dispatchers.IO) {
-                    okHttpClient.newCall(sinaRequest).execute()
+                    okHttpClient.newCall(jdRequest).execute()
                 }
 
                 if (response.isSuccessful) {
                     val body = response.body?.string()
                     if (!body.isNullOrEmpty()) {
-                        val parsed = parseSinaResponse(body)
+                        val parsed = parseJdResponse(body)
                         if (parsed != null) {
                             fetchedPrice = parsed.first
                             fetchedTime = parsed.second
-                            sourceName = "新浪黄金现货(备用)"
-                            lastError = null // 备用接口拉取成功，清除错误提示
-                            Log.i(TAG, "Successfully fetched price from Sina: $fetchedPrice")
+                            sourceName = "京东金融"
+                            Log.i(TAG, "Successfully fetched price from JD: $fetchedPrice")
                         } else {
-                            lastError = "${lastError ?: ""}; 新浪行情解析为空"
+                            lastError = "京东数据字段解析为空"
                         }
                     } else {
-                        lastError = "${lastError ?: ""}; 新浪返回空内容"
+                        lastError = "京东返回空内容"
                     }
                 } else {
-                    lastError = "${lastError ?: ""}; 新浪返回 HTTP ${response.code}"
+                    lastError = "京东返回 HTTP ${response.code}"
                 }
             } catch (e: Exception) {
                 val err = formatException(e)
-                Log.e(TAG, "Sina API failed: $err", e)
-                lastError = "${lastError ?: ""}; 新浪失败($err)"
+                Log.e(TAG, "JD API failed: $err", e)
+                lastError = "京东失败($err)"
             }
-        }
 
-        // 3. 结果调度与 UI / 通知刷新
-        if (fetchedPrice != null) {
-            handleNewPrice(fetchedPrice, fetchedTime, sourceName)
-        } else {
-            val finalErrMsg = lastError ?: "网络拉取金价失败"
-            Log.e(TAG, "All sources failed: $finalErrMsg")
-            val timeFormatted = formatTimestamp(System.currentTimeMillis())
-            _monitorState.value = _monitorState.value.copy(
-                statusMessage = "拉取异常: $finalErrMsg"
-            )
-            updatePersistentNotification(
-                priceText = "金价拉取失败",
-                detailText = "$finalErrMsg (等待重试 $timeFormatted)"
-            )
+            // 2. 若京东接口失败，自动切换新浪黄金现货备用接口
+            if (fetchedPrice == null) {
+                try {
+                    Log.w(TAG, "Switching to fallback Sina gold API...")
+                    val sinaRequest = Request.Builder()
+                        .url(SINA_API_URL)
+                        .header("User-Agent", BROWSER_UA)
+                        .header("Accept", "*/*")
+                        .header("Referer", "https://finance.sina.com.cn")
+                        .get()
+                        .build()
+
+                    val response = withContext(Dispatchers.IO) {
+                        okHttpClient.newCall(sinaRequest).execute()
+                    }
+
+                    if (response.isSuccessful) {
+                        val body = response.body?.string()
+                        if (!body.isNullOrEmpty()) {
+                            val parsed = parseSinaResponse(body)
+                            if (parsed != null) {
+                                fetchedPrice = parsed.first
+                                fetchedTime = parsed.second
+                                sourceName = "新浪黄金现货(备用)"
+                                lastError = null // 备用接口拉取成功，清除错误提示
+                                Log.i(TAG, "Successfully fetched price from Sina: $fetchedPrice")
+                            } else {
+                                lastError = "${lastError ?: ""}; 新浪行情解析为空"
+                            }
+                        } else {
+                            lastError = "${lastError ?: ""}; 新浪返回空内容"
+                        }
+                    } else {
+                        lastError = "${lastError ?: ""}; 新浪返回 HTTP ${response.code}"
+                    }
+                } catch (e: Exception) {
+                    val err = formatException(e)
+                    Log.e(TAG, "Sina API failed: $err", e)
+                    lastError = "${lastError ?: ""}; 新浪失败($err)"
+                }
+            }
+
+            // 3. 结果调度与 UI / 通知刷新
+            if (fetchedPrice != null) {
+                handleNewPrice(fetchedPrice, fetchedTime, sourceName)
+            } else {
+                val finalErrMsg = lastError ?: "网络拉取金价失败"
+                Log.e(TAG, "All sources failed: $finalErrMsg")
+                val timeFormatted = formatTimestamp(System.currentTimeMillis())
+                _monitorState.value = _monitorState.value.copy(
+                    statusMessage = "拉取异常: $finalErrMsg"
+                )
+                updatePersistentNotification(
+                    priceText = "金价拉取失败",
+                    detailText = "$finalErrMsg (等待重试 $timeFormatted)"
+                )
+            }
+        } finally {
+            try {
+                if (wakeLock.isHeld) {
+                    wakeLock.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error releasing wake lock: ${e.message}")
+            }
         }
     }
 
@@ -330,7 +352,7 @@ class GoldPriceService : Service() {
         if (targetThreshold > 0) {
             if (currentPrice < targetThreshold) {
                 if (!hasAlerted) {
-                    // 低于阈值且未告警过 -> 触发高优先级横幅告警
+                    // 低于阈值且未告警过 -> 触发高优先级横幅告警并唤醒点亮屏幕
                     sendAlertNotification(currentPrice, targetThreshold)
                     hasAlerted = true
                 }
@@ -359,9 +381,30 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 发送高优先级横幅通知（带声音和振动）
+     * 点亮屏幕（持续 5 秒），使手机在锁屏黑屏状态下能够直接亮屏展示通知
+     */
+    @Suppress("DEPRECATION")
+    private fun wakeUpScreen() {
+        try {
+            val screenWakeLock = powerManager.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
+                "Jinjia:AlertScreenWakeLock"
+            )
+            screenWakeLock.acquire(5_000L) // 5 秒后自动释放
+            Log.i(TAG, "Screen wake lock acquired for 5 seconds to show alert")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to wake up screen: ${e.message}", e)
+        }
+    }
+
+    /**
+     * 发送高优先级横幅通知（带声音和振动，锁屏完全可见并唤醒点亮屏幕）
      */
     private fun sendAlertNotification(price: Double, threshold: Double) {
+        // 1. 锁屏点亮屏幕
+        wakeUpScreen()
+
+        // 2. 构建并弹出通知
         val pendingIntent = createContentPendingIntent()
 
         val alertNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
@@ -370,6 +413,7 @@ class GoldPriceService : Service() {
             .setContentText("当前实时金价 ¥%.2f /克，已跌破监控阈值 ¥%.2f /克！".format(price, threshold))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // 锁屏完全公开展示
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
@@ -395,6 +439,7 @@ class GoldPriceService : Service() {
             .setContentText(detailText)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // 锁屏公开展示
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(pendingIntent)
             .build()
@@ -414,7 +459,7 @@ class GoldPriceService : Service() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // 常驻监控渠道（Low 重要度，无声息）
+            // 常驻监控渠道（Low 重要度，无声息，锁屏完全可见）
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_ID,
                 getString(R.string.notification_channel_monitor_name),
@@ -422,9 +467,10 @@ class GoldPriceService : Service() {
             ).apply {
                 description = "显示金价常驻前台监控状态与最新行情"
                 setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
 
-            // 告警渠道（High 重要度，悬浮横幅、振动与铃声）
+            // 告警渠道（High 重要度，悬浮横幅、振动与铃声，锁屏完全可见）
             val alertChannel = NotificationChannel(
                 CHANNEL_ALERT_ID,
                 getString(R.string.notification_channel_alert_name),
@@ -434,6 +480,7 @@ class GoldPriceService : Service() {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 200, 500)
                 setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
 
             notificationManager.createNotificationChannel(monitorChannel)
