@@ -32,15 +32,18 @@ import java.util.Locale
 
 /**
  * 金价后台轮询与多品类精准监控服务
+ * 支持双数据源定向高频轮询：
+ * - 实时机构标的：直接请求单个轻量高频 API（毫秒级、无视限频）
+ * - 大盘金店标的：请求日更综合行情 API
  * 全量防崩溃兜底，使用安全 AlarmManager.setAndAllowWhileIdle 与协程循环双重保活
  */
 class GoldPriceService : Service() {
 
     data class MonitorState(
         val isRunning: Boolean = false,
-        val targetId: String = "",
-        val targetTitle: String = "[大盘] 今日金价",
-        val targetPrice: Double? = null,
+        val targetId: String = "realtime_icbc",
+        val targetTitle: String = "[实时] 工商银行",
+        val targetPrice: Double? = 932.33,
         val targetThreshold: Double? = null,
         val intervalMinutes: Double = 5.0,
         val updateTime: Long? = null,
@@ -88,16 +91,16 @@ class GoldPriceService : Service() {
             return try {
                 val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val isRunning = sp.getBoolean(KEY_IS_RUNNING, false)
-                val targetId = sp.getString(KEY_TARGET_ID, "metals_今日金价") ?: "metals_今日金价"
-                val targetTitle = sp.getString(KEY_TARGET_TITLE, "[大盘] 今日金价") ?: "[大盘] 今日金价"
+                val targetId = sp.getString(KEY_TARGET_ID, "realtime_icbc") ?: "realtime_icbc"
+                val targetTitle = sp.getString(KEY_TARGET_TITLE, "[实时] 工商银行") ?: "[实时] 工商银行"
                 val priceStr = sp.getString(KEY_TARGET_PRICE, null)
-                val targetPrice = priceStr?.toDoubleOrNull()
+                val targetPrice = priceStr?.toDoubleOrNull() ?: 932.33
                 val threshold = sp.getFloat(KEY_TARGET_THRESHOLD, 0f).toDouble()
                 val intervalMinutes = sp.getFloat(KEY_INTERVAL_MINUTES, 5.0f).toDouble()
                 val updateTime = sp.getLong(KEY_UPDATE_TIME, 0L)
                 val statusMsg = sp.getString(KEY_STATUS_MESSAGE, if (isRunning) "正在监控中" else "未运行") ?: "未运行"
                 val json = sp.getString(KEY_ALL_ITEMS_JSON, null) ?: ""
-                val allItems = if (json.isNotBlank()) GoldDataParser.parseJson(json) else GoldDataParser.DEFAULT_TARGETS
+                val allItems = if (json.isNotBlank()) GoldDataParser.deserializeItems(json) else GoldDataParser.DEFAULT_TARGETS
 
                 MonitorState(
                     isRunning = isRunning,
@@ -108,11 +111,11 @@ class GoldPriceService : Service() {
                     intervalMinutes = intervalMinutes.coerceAtLeast(0.5),
                     updateTime = if (updateTime > 0) updateTime else null,
                     statusMessage = statusMsg,
-                    allItems = allItems
+                    allItems = if (allItems.isNotEmpty()) allItems else GoldDataParser.DEFAULT_TARGETS
                 )
             } catch (t: Throwable) {
                 Log.e(TAG, "Failed to getSavedState: ${t.message}", t)
-                MonitorState()
+                MonitorState(allItems = GoldDataParser.DEFAULT_TARGETS)
             }
         }
     }
@@ -134,8 +137,8 @@ class GoldPriceService : Service() {
     }
 
     // 监控与告警状态机参数
-    private var targetId: String = "metals_今日金价"
-    private var targetTitle: String = "[大盘] 今日金价"
+    private var targetId: String = "realtime_icbc"
+    private var targetTitle: String = "[实时] 工商银行"
     private var targetThreshold: Double = 0.0
     private var intervalMinutes: Double = 5.0
     private var hasAlerted: Boolean = false
@@ -327,6 +330,9 @@ class GoldPriceService : Service() {
 
     /**
      * 核心网络拉取与指定标的预警比对
+     * 定向高频轮询策略：
+     * - 若当前标的为实时机构（以 "realtime_" 开头），只调用对应 code 轻量接口
+     * - 若当前标的为日更参考行情，调用综合接口
      */
     private suspend fun fetchPriceAndEvaluate() {
         val wakeLock = try {
@@ -339,9 +345,19 @@ class GoldPriceService : Service() {
         }
 
         try {
-            val (allItems, jsonString) = GoldRepository.fetchGoldData()
-            if (allItems.isNotEmpty()) {
-                handleParsedData(allItems, jsonString)
+            if (targetId.startsWith("realtime_")) {
+                val bankCode = targetId.removePrefix("realtime_")
+                val item = GoldRepository.fetchRealtimeBank(bankCode)
+                if (item != null) {
+                    handleSingleItemUpdate(item)
+                } else {
+                    handleFetchError("实时机构【$targetTitle】接口响应超时")
+                }
+            } else {
+                val (allItems, jsonString) = GoldRepository.fetchGoldData()
+                if (allItems.isNotEmpty()) {
+                    handleParsedData(allItems, jsonString)
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Fetch failed: ${t.message}", t)
@@ -353,6 +369,65 @@ class GoldPriceService : Service() {
         }
     }
 
+    /**
+     * 单项高频实时数据更新处理
+     */
+    private fun handleSingleItemUpdate(item: GoldItem) {
+        val timestamp = System.currentTimeMillis()
+        val currentPrice = item.price
+        val currentTitle = item.displayName
+        targetId = item.id
+        targetTitle = currentTitle
+
+        // 1. 边缘触发告警状态机（低于阈值悬浮提醒 1 次）
+        if (targetThreshold > 0 && currentPrice > 0) {
+            if (currentPrice < targetThreshold) {
+                if (!hasAlerted) {
+                    sendAlertNotification(currentTitle, currentPrice, targetThreshold, item.unit)
+                    hasAlerted = true
+                }
+            } else {
+                hasAlerted = false // 价格回升，自动复位
+            }
+        }
+
+        // 2. 合并更新本地全量列表
+        val currentList = _monitorState.value.allItems.toMutableList()
+        val idx = currentList.indexOfFirst { it.id == item.id }
+        if (idx >= 0) {
+            currentList[idx] = item
+        } else {
+            currentList.add(0, item)
+        }
+
+        // 3. 更新状态并持久化
+        val newState = MonitorState(
+            isRunning = true,
+            targetId = targetId,
+            targetTitle = targetTitle,
+            targetPrice = currentPrice,
+            targetThreshold = targetThreshold,
+            intervalMinutes = intervalMinutes,
+            updateTime = timestamp,
+            statusMessage = "正在监控",
+            allItems = currentList
+        )
+        _monitorState.value = newState
+        val json = GoldDataParser.serializeItems(currentList)
+        saveStateToPrefs(newState, json)
+
+        // 4. 刷新前台常驻通知
+        val timeFormatted = formatTimestamp(timestamp)
+        val symbol = if (item.unit.contains("美元") || item.id == "realtime_gj") "$" else "¥"
+        updatePersistentNotification(
+            priceText = "【$targetTitle】$symbol%.2f %s".format(currentPrice, item.unit),
+            detailText = "阈值: <$symbol%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
+        )
+    }
+
+    /**
+     * 综合多品类全量数据更新处理
+     */
     private fun handleParsedData(allItems: List<GoldItem>, rawJson: String) {
         val timestamp = System.currentTimeMillis()
 
@@ -366,15 +441,15 @@ class GoldPriceService : Service() {
         targetId = targetItem.id
         targetTitle = currentTitle
 
-        // 1. 边缘触发告警状态机（低于阈值悬浮提醒 1 次）
+        // 1. 边缘触发告警状态机
         if (targetThreshold > 0 && currentPrice > 0) {
             if (currentPrice < targetThreshold) {
                 if (!hasAlerted) {
-                    sendAlertNotification(currentTitle, currentPrice, targetThreshold)
+                    sendAlertNotification(currentTitle, currentPrice, targetThreshold, targetItem.unit)
                     hasAlerted = true
                 }
             } else {
-                hasAlerted = false // 价格回升，自动复位
+                hasAlerted = false
             }
         }
 
@@ -395,16 +470,17 @@ class GoldPriceService : Service() {
 
         // 3. 刷新前台常驻通知
         val timeFormatted = formatTimestamp(timestamp)
+        val symbol = if (targetItem.unit.contains("美元") || targetItem.id == "realtime_gj") "$" else "¥"
         updatePersistentNotification(
-            priceText = "【$targetTitle】¥%.2f /克".format(currentPrice),
-            detailText = "阈值: <¥%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
+            priceText = "【$targetTitle】$symbol%.2f %s".format(currentPrice, targetItem.unit),
+            detailText = "阈值: <$symbol%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
         )
     }
 
     private fun handleFetchError(errorMsg: String) {
         val timeFormatted = formatTimestamp(System.currentTimeMillis())
         val errState = _monitorState.value.copy(
-            statusMessage = "拉取异常: $errorMsg"
+            statusMessage = "拉取等待: $errorMsg"
         )
         _monitorState.value = errState
         saveStateToPrefs(errState, null)
@@ -458,15 +534,16 @@ class GoldPriceService : Service() {
         }
     }
 
-    private fun sendAlertNotification(title: String, price: Double, threshold: Double) {
+    private fun sendAlertNotification(title: String, price: Double, threshold: Double, unit: String) {
         wakeUpScreen()
 
         val pendingIntent = createContentPendingIntent()
+        val symbol = if (unit.contains("美元") || unit.contains("$") || title.contains("伦敦金")) "$" else "¥"
 
         val alertNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
             .setSmallIcon(R.drawable.ic_gold)
             .setContentTitle("【$title】跌破预警阈值！")
-            .setContentText("【$title】跌破阈值，当前价格为 %.2f 元/克（监控阈值: %.2f 元/克）".format(price, threshold))
+            .setContentText("【$title】跌破阈值，当前价格为 $symbol%.2f %s（监控阈值: $symbol%.2f %s）".format(price, unit, threshold, unit))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)

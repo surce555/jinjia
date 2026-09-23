@@ -2,6 +2,9 @@ package com.example.jinjia
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -10,29 +13,135 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 统一网络请求与数据解析仓储类
- * 彻底移除 code/status/resultCode 校验，HTTP 200 + 有效 JSON 即视为成功
+ * 接入双数据源：
+ * 1. 数据源 A（各大银行与金融机构高频实时源）：https://jin.20021002.xyz/api.php?type={code}
+ * 2. 数据源 B（大盘贵金属与金店/回收日更参考）：https://tmini.net/api/gold-price
  */
 object GoldRepository {
     private const val TAG = "GoldRepository"
 
-    private const val API_URL = "https://tmini.net/api/gold-price"
+    private const val SOURCE_A_BASE_URL = "https://jin.20021002.xyz/api.php?type="
+    private const val SOURCE_B_URL = "https://tmini.net/api/gold-price"
     private const val BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) Chrome/120.0.0.0"
 
     private val okHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
             .followRedirects(true)
             .build()
     }
 
+    // ==================== 数据源 A：高频金融机构实时源 ====================
+
     /**
-     * 发起网络请求并解析金价数据
+     * 单独拉取指定机构的高频实时行情（毫秒级轻量接口，用于高频定向监控）
+     */
+    suspend fun fetchRealtimeBank(code: String): GoldItem? = withContext(Dispatchers.IO) {
+        val url = "$SOURCE_A_BASE_URL$code"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "application/json")
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "fetchRealtimeBank $code HTTP error: ${response.code}")
+                return@withContext null
+            }
+
+            val bodyString = response.body?.string() ?: return@withContext null
+            return@withContext parseRealtimeBankJson(code, bodyString)
+        } catch (t: Throwable) {
+            Log.e(TAG, "fetchRealtimeBank $code exception: ${t.message}", t)
+            return@withContext null
+        }
+    }
+
+    /**
+     * 并发拉取所有启用的实时金融机构数据
+     */
+    suspend fun fetchAllRealtimeBanks(enabledCodes: List<String>): List<GoldItem> = withContext(Dispatchers.IO) {
+        if (enabledCodes.isEmpty()) return@withContext emptyList()
+        coroutineScope {
+            enabledCodes.map { code ->
+                async {
+                    fetchRealtimeBank(code)
+                }
+            }.awaitAll().filterNotNull()
+        }
+    }
+
+    /**
+     * 健壮解析实时机构接口返回的数据
+     * 支持提取 price, sell_price, buy_price, gold_price 或其他数值型字段
+     */
+    fun parseRealtimeBankJson(code: String, jsonString: String): GoldItem? {
+        return try {
+            val root = JSONObject(jsonString)
+            val dataObj = if (root.has("data") && root.opt("data") is JSONObject) {
+                root.getJSONObject("data")
+            } else {
+                root
+            }
+
+            val config = GoldDataParser.REALTIME_BANKS.find { it.code.equals(code, ignoreCase = true) }
+            val name = dataObj.optString("name", config?.name ?: code).trim()
+            val currency = dataObj.optString("currency", if (code == "gj") "$" else "¥").trim()
+            val unit = if (currency == "$" || code == "gj") "美元/盎司" else "元/克"
+
+            // 容错读取价格字段
+            val priceRaw = (dataObj.opt("price")
+                ?: dataObj.opt("sell_price")
+                ?: dataObj.opt("buy_price")
+                ?: dataObj.opt("gold_price")
+                ?: "").toString().trim()
+
+            val price = priceRaw.toDoubleOrNull() ?: config?.defaultPrice ?: 0.0
+            if (price <= 0.0) return null
+
+            val updateTime = dataObj.optString("update_time", "").ifBlank {
+                dataObj.optString("time", "").ifBlank {
+                    dataObj.optString("updated", "")
+                }
+            }
+
+            val change = dataObj.optDouble("change", 0.0)
+            val changePct = dataObj.optDouble("change_pct", 0.0)
+            val subtitle = if (change != 0.0) {
+                val sign = if (change > 0) "+" else ""
+                "实时报价 (${sign}%.2f / ${sign}%.2f%%)".format(change, changePct)
+            } else {
+                "高频实时源 (${config?.symbol ?: code.uppercase()})"
+            }
+
+            GoldItem(
+                id = "realtime_$code",
+                category = GoldDataParser.CAT_REALTIME,
+                title = "[实时] $name",
+                subtitle = subtitle,
+                price = price,
+                unit = unit,
+                updateTime = updateTime.ifBlank { "实时" }
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "parseRealtimeBankJson for $code failed: ${t.message}", t)
+            null
+        }
+    }
+
+    // ==================== 数据源 B：综合大盘/金店/回收参考源 ====================
+
+    /**
+     * 发起网络请求并解析综合金价数据
      * HTTP 200 且解析出 JSON 即视为成功，无任何非 0 字段拦截
      */
     suspend fun fetchGoldData(): Pair<List<GoldItem>, String> = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url(API_URL)
+            .url(SOURCE_B_URL)
             .header("User-Agent", BROWSER_UA)
             .header("Accept", "application/json")
             .get()

@@ -1,0 +1,202 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/card_background">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="监控与展示管理"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="勾选参与盯盘与列表展示的机构与分类"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <!-- 模块一：高频金融机构 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="⚡ 实时高频机构 (数据源 A)"
+                android:textColor="@color/gold_primary_dark"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnToggleAllBanks"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="36dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="0dp"
+                android:text="全选/反选"
+                android:textColor="@color/gold_primary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <CheckBox
+            android:id="@+id/cbBankIcbc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="工商银行 (实时) - ICBC"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankZs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="浙商银行 (实时) - CZB"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankMs"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="民生银行 (实时) - CMBC"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankCgb"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="广发银行 (实时) - CGB"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankCib"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="兴业银行 (实时) - CIB"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankJd"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="京东黄金 (实时) - JD"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbBankGj"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="国际伦敦金 (实时 USD) - XAU"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#EEEEEE" />
+
+        <!-- 模块二：行情分类模块 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📑 行情分类 Tab 模块展示"
+            android:textColor="@color/gold_primary_dark"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <CheckBox
+            android:id="@+id/cbCatRealtime"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="⚡ 实时机构行情"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbCatBanks"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🏦 银行投资金条"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbCatStores"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🏬 品牌金店金价"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbCatMetals"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="📈 大盘贵金属行情"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <CheckBox
+            android:id="@+id/cbCatRecycle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="♻️ 黄金回收报价"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <!-- 底部操作按钮 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:gravity="end"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDialogCancel"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="44dp"
+                android:text="取消"
+                android:textColor="@color/text_secondary" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnDialogSave"
+                android:layout_width="wrap_content"
+                android:layout_height="44dp"
+                android:layout_marginStart="8dp"
+                android:backgroundTint="@color/gold_primary"
+                android:text="保存并应用"
+                android:textColor="@color/white"
+                app:cornerRadius="8dp" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</androidx.core.widget.NestedScrollView>

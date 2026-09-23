@@ -257,7 +257,7 @@
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
                         android:layout_width="wrap_content"
                         android:layout_height="48dp"
-                        android:text="分类开关"
+                        android:text="展示管理"
                         android:textColor="@color/gold_primary_dark"
                         app:cornerRadius="10dp"
                         app:strokeColor="@color/gold_primary"
@@ -285,9 +285,8 @@
                     android:id="@+id/tabLayout"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    app:tabGravity="fill"
                     app:tabIndicatorColor="@color/gold_primary"
-                    app:tabMode="fixed"
+                    app:tabMode="auto"
                     app:tabSelectedTextColor="@color/gold_primary_dark"
                     app:tabTextColor="@color/text_secondary" />
 

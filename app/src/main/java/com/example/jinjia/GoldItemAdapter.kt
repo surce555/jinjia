@@ -18,7 +18,7 @@ class GoldItemAdapter(
         fun bind(item: GoldItem) {
             binding.tvItemTitle.text = item.title
             binding.tvItemSubtitle.text = item.subtitle
-            binding.tvItemPrice.text = "¥ %.2f %s".format(item.price, item.unit)
+            binding.tvItemPrice.text = item.priceDisplay
             binding.tvItemTime.text = if (item.updateTime.isNotBlank()) "更新: ${item.updateTime}" else ""
 
             binding.btnSetMonitor.setOnClickListener {

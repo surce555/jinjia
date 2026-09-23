@@ -23,8 +23,10 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.jinjia.databinding.ActivityMainBinding
+import com.example.jinjia.databinding.DialogDisplaySettingsBinding
 import com.google.android.material.tabs.TabLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -38,11 +40,12 @@ class MainActivity : AppCompatActivity() {
 
     private var hasPromptedBatteryOptimization = false
 
-    // 统一标的数据列表，初始必须使用 DEFAULT_TARGETS，确保任何时候绝不为空白
+    // 统一标的数据列表，初始置入 DEFAULT_TARGETS，确保任何时候绝不为空白
     private val allTargetsList = mutableListOf<GoldItem>()
     private var selectedTargetItem: GoldItem? = null
+    private var currentSelectedCategory: String = GoldDataParser.CAT_REALTIME
 
-    // 刷新频率选项映射
+    // 刷新频率选项映射 (严格限制下限 >= 0.5 分钟/30秒)
     private val intervalOptions = listOf(
         Pair("0.5 分钟 (30秒)", 0.5),
         Pair("1 分钟", 1.0),
@@ -53,12 +56,13 @@ class MainActivity : AppCompatActivity() {
         Pair("30 分钟", 30.0)
     )
 
-    // 分类展示开关
-    private val categoryKeys = listOf(
-        Pair(GoldDataParser.CAT_BANKS, "各大银行投资金条"),
-        Pair(GoldDataParser.CAT_STORES, "品牌金店金价"),
-        Pair(GoldDataParser.CAT_METALS, "大盘贵金属行情"),
-        Pair(GoldDataParser.CAT_RECYCLE, "黄金回收报价")
+    // 分类展示标签列表
+    private val allCategories = listOf(
+        Pair(GoldDataParser.CAT_REALTIME, "⚡ 实时机构"),
+        Pair(GoldDataParser.CAT_BANKS, "🏦 银行金条"),
+        Pair(GoldDataParser.CAT_STORES, "🏬 品牌金店"),
+        Pair(GoldDataParser.CAT_METALS, "📈 大盘行情"),
+        Pair(GoldDataParser.CAT_RECYCLE, "♻️ 黄金回收")
     )
 
     // Android 13+ 通知权限启动器
@@ -78,7 +82,7 @@ class MainActivity : AppCompatActivity() {
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
 
-            // 1. 初始化预置标的数据（杜绝 Spinner 空白）
+            // 1. 初始化预置标的数据（杜绝任何空白状态，首项必为工商银行实时行情）
             allTargetsList.clear()
             allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
 
@@ -88,16 +92,15 @@ class MainActivity : AppCompatActivity() {
             initViews()
 
             // 预填充 Spinner，默认选中首项
-            updateTargetSpinner()
             selectedTargetItem = allTargetsList.firstOrNull()
+            updateTargetSpinner()
             selectedTargetItem?.let {
-                binding.tvCurrentTargetTitle.text = it.displayName
-                binding.tvTargetPrice.text = "¥ %.2f /克".format(it.price)
+                bindTopCardItem(it)
             }
 
             observeServiceState()
 
-            // 2. 自动异步拉取全网最新数据
+            // 2. 自动异步并发拉取双数据源最新数据（毫秒级刷新）
             fetchGoldDataImmediately()
         } catch (t: Throwable) {
             Log.e("MainActivity", "Error in onCreate: ${t.message}", t)
@@ -126,39 +129,83 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 进入 App 时的冷启动即时拉取逻辑（无需点击启动监控）
+     * 进入 App 时的冷启动即时并发双数据源拉取（无需点击启动监控）
      */
     private fun fetchGoldDataImmediately() {
         val currentState = GoldPriceService.monitorState.value
         if (!currentState.isRunning) {
-            binding.tvServiceStatus.text = "正在拉取最新行情..."
+            binding.tvServiceStatus.text = "正在同步双数据源行情..."
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.gold_primary_dark))
         }
 
+        val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+        val enabledBankCodes = GoldDataParser.REALTIME_BANKS
+            .map { it.code }
+            .filter { sp.getBoolean("bank_enabled_$it", true) }
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val (items, rawJson) = GoldRepository.fetchGoldData()
+                // 1. 并发拉取高频实时机构源 (数据源 A)
+                val realtimeJob = async {
+                    try {
+                        GoldRepository.fetchAllRealtimeBanks(enabledBankCodes)
+                    } catch (e: Exception) {
+                        Log.w("MainActivity", "Realtime fetch error: ${e.message}")
+                        emptyList()
+                    }
+                }
 
-                // 持久化保存
-                val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+                // 2. 并发拉取综合大盘参考行情 (数据源 B)
+                val marketJob = async {
+                    try {
+                        GoldRepository.fetchGoldData()
+                    } catch (e: Exception) {
+                        Log.w("MainActivity", "Market fetch error: ${e.message}")
+                        Pair(emptyList(), "")
+                    }
+                }
+
+                val realtimeItems = realtimeJob.await()
+                val (marketItems, _) = marketJob.await()
+
+                val combined = mutableListOf<GoldItem>()
+
+                // 高频实时机构数据置顶
+                if (realtimeItems.isNotEmpty()) {
+                    combined.addAll(realtimeItems)
+                } else {
+                    combined.addAll(GoldDataParser.DEFAULT_REALTIME_BANKS.filter {
+                        enabledBankCodes.contains(it.id.removePrefix("realtime_"))
+                    })
+                }
+
+                // 综合行情数据紧随其后
+                if (marketItems.isNotEmpty()) {
+                    combined.addAll(marketItems)
+                } else {
+                    combined.addAll(GoldDataParser.DEFAULT_MARKET_TARGETS)
+                }
+
+                // 持久化保存合并数据
+                val serialized = GoldDataParser.serializeItems(combined)
                 sp.edit()
-                    .putString(GoldPriceService.KEY_ALL_ITEMS_JSON, rawJson)
+                    .putString(GoldPriceService.KEY_ALL_ITEMS_JSON, serialized)
                     .putLong(GoldPriceService.KEY_UPDATE_TIME, System.currentTimeMillis())
                     .apply()
 
                 withContext(Dispatchers.Main) {
-                    if (items.isNotEmpty()) {
+                    if (combined.isNotEmpty()) {
                         allTargetsList.clear()
-                        allTargetsList.addAll(items)
+                        allTargetsList.addAll(combined)
                         updateTargetSpinner()
                         filterAndDisplayList()
 
                         // 若未手动选择过标的，则默认选第一项
                         if (selectedTargetItem == null) {
-                            setTargetItem(items.first())
+                            setTargetItem(combined.first())
                         } else {
                             // 保持当前选中标的的最新价格更新
-                            val current = items.find { it.id == selectedTargetItem?.id }
+                            val current = combined.find { it.id == selectedTargetItem?.id }
                             if (current != null) {
                                 setTargetItem(current)
                             }
@@ -170,7 +217,7 @@ class MainActivity : AppCompatActivity() {
 
                     val running = GoldPriceService.monitorState.value.isRunning
                     if (!running) {
-                        binding.tvServiceStatus.text = "已更新最新行情 (${items.size}项)"
+                        binding.tvServiceStatus.text = "已更新最新行情 (${combined.size}项)"
                         binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
                     }
                 }
@@ -182,7 +229,7 @@ class MainActivity : AppCompatActivity() {
                         binding.tvServiceStatus.text = "拉取提示: ${t.message}"
                         binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
                     }
-                    Toast.makeText(this@MainActivity, "行情拉取提示: ${t.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "行情同步提示: ${t.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -216,14 +263,34 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initTabs() {
+        val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
         binding.tabLayout.removeAllTabs()
-        binding.tabLayout.addTab(binding.tabLayout.newTab().setText("各大银行").setTag(GoldDataParser.CAT_BANKS))
-        binding.tabLayout.addTab(binding.tabLayout.newTab().setText("品牌金店").setTag(GoldDataParser.CAT_STORES))
-        binding.tabLayout.addTab(binding.tabLayout.newTab().setText("大盘行情").setTag(GoldDataParser.CAT_METALS))
-        binding.tabLayout.addTab(binding.tabLayout.newTab().setText("黄金回收").setTag(GoldDataParser.CAT_RECYCLE))
 
+        var selectedIndex = 0
+        var addedCount = 0
+
+        for (cat in allCategories) {
+            val isEnabled = sp.getBoolean("show_cat_${cat.first}", true)
+            if (isEnabled) {
+                val tab = binding.tabLayout.newTab().setText(cat.second).setTag(cat.first)
+                binding.tabLayout.addTab(tab)
+                if (cat.first == currentSelectedCategory) {
+                    selectedIndex = addedCount
+                }
+                addedCount++
+            }
+        }
+
+        if (binding.tabLayout.tabCount > 0) {
+            val tabToSelect = binding.tabLayout.getTabAt(selectedIndex)
+            tabToSelect?.select()
+            currentSelectedCategory = tabToSelect?.tag as? String ?: GoldDataParser.CAT_REALTIME
+        }
+
+        binding.tabLayout.clearOnTabSelectedListeners()
         binding.tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
             override fun onTabSelected(tab: TabLayout.Tab?) {
+                currentSelectedCategory = tab?.tag as? String ?: GoldDataParser.CAT_REALTIME
                 filterAndDisplayList()
             }
             override fun onTabUnselected(tab: TabLayout.Tab?) {}
@@ -243,7 +310,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnSettings.setOnClickListener {
-            showCategorySettingsDialog()
+            showDisplaySettingsDialog()
         }
     }
 
@@ -252,8 +319,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setTargetItem(item: GoldItem) {
         selectedTargetItem = item
-        binding.tvCurrentTargetTitle.text = item.displayName
-        binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
+        bindTopCardItem(item)
 
         val idx = allTargetsList.indexOfFirst { it.id == item.id }
         if (idx >= 0 && binding.spTarget.adapter != null && binding.spTarget.selectedItemPosition != idx) {
@@ -267,13 +333,45 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun bindTopCardItem(item: GoldItem) {
+        binding.tvCurrentTargetTitle.text = item.displayName
+        binding.tvTargetPrice.text = item.priceDisplay
+    }
+
     /**
      * 刷新并更新下拉标的列表，选择联动顶部价格
+     * 高频实时标的带有 ⚡ 标识并优先展示
      */
     private fun updateTargetSpinner() {
         if (allTargetsList.isEmpty()) return
 
-        val displayLabels = allTargetsList.map { "${it.displayName} (¥%.2f/克)".format(it.price) }
+        val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+
+        // 过滤掉已被禁用的高频银行
+        val displayItems = allTargetsList.filter { item ->
+            if (item.category == GoldDataParser.CAT_REALTIME) {
+                val code = item.id.removePrefix("realtime_")
+                sp.getBoolean("bank_enabled_$code", true)
+            } else {
+                true
+            }
+        }
+
+        if (displayItems.isEmpty()) return
+
+        val displayLabels = displayItems.map { item ->
+            val symbol = if (item.unit.contains("美元") || item.id == "realtime_gj") "$" else "¥"
+            val icon = when (item.category) {
+                GoldDataParser.CAT_REALTIME -> "⚡"
+                GoldDataParser.CAT_BANKS -> "🏦"
+                GoldDataParser.CAT_STORES -> "🏬"
+                GoldDataParser.CAT_METALS -> "📈"
+                GoldDataParser.CAT_RECYCLE -> "♻️"
+                else -> "📌"
+            }
+            "$icon ${item.displayName}  ($symbol%.2f %s)".format(item.price, item.unit)
+        }
+
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, displayLabels).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
@@ -281,20 +379,19 @@ class MainActivity : AppCompatActivity() {
 
         // 默认恢复之前已选或首项
         val saved = GoldPriceService.getSavedState(this)
-        val selectedIdx = allTargetsList.indexOfFirst { it.id == (selectedTargetItem?.id ?: saved.targetId) }.let {
+        val selectedIdx = displayItems.indexOfFirst { it.id == (selectedTargetItem?.id ?: saved.targetId) }.let {
             if (it >= 0) it else 0
         }
         binding.spTarget.setSelection(selectedIdx)
-        selectedTargetItem = allTargetsList.getOrNull(selectedIdx)
+        selectedTargetItem = displayItems.getOrNull(selectedIdx)
 
         binding.spTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position in allTargetsList.indices) {
-                    val item = allTargetsList[position]
+                if (position in displayItems.indices) {
+                    val item = displayItems[position]
                     selectedTargetItem = item
                     // 标的选择立即联动：顶部卡片即时刷新该标的名称与价格
-                    binding.tvCurrentTargetTitle.text = item.displayName
-                    binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
+                    bindTopCardItem(item)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -302,53 +399,114 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun filterAndDisplayList() {
-        val selectedTab = binding.tabLayout.getTabAt(binding.tabLayout.selectedTabPosition)
-        val catTag = selectedTab?.tag as? String ?: GoldDataParser.CAT_BANKS
-
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
-        val isCatEnabled = sp.getBoolean("show_cat_$catTag", true)
+        val isCatEnabled = sp.getBoolean("show_cat_$currentSelectedCategory", true)
 
-        if (!isCatEnabled) {
+        if (!isCatEnabled || binding.tabLayout.tabCount == 0) {
             goldItemAdapter.submitList(emptyList())
             binding.tvEmptyList.visibility = View.VISIBLE
-            binding.tvEmptyList.text = "该分类展示已在【分类开关】中被关闭"
+            binding.tvEmptyList.text = "该分类展示已在【展示管理】中被关闭"
             return
         }
 
-        val filtered = allTargetsList.filter { it.category == catTag }
+        var filtered = allTargetsList.filter { it.category == currentSelectedCategory }
+
+        // 若是实时机构分类，过滤掉未勾选启用的银行
+        if (currentSelectedCategory == GoldDataParser.CAT_REALTIME) {
+            filtered = filtered.filter { item ->
+                val code = item.id.removePrefix("realtime_")
+                sp.getBoolean("bank_enabled_$code", true)
+            }
+        }
+
         goldItemAdapter.submitList(filtered)
 
         if (filtered.isEmpty()) {
             binding.tvEmptyList.visibility = View.VISIBLE
-            binding.tvEmptyList.text = "暂无数据，正在等待拉取..."
+            binding.tvEmptyList.text = "暂无数据或所选机构已被关闭显示"
         } else {
             binding.tvEmptyList.visibility = View.GONE
         }
     }
 
-    private fun showCategorySettingsDialog() {
+    /**
+     * 监控与展示管理弹窗（包含 7 家高频实时机构开关与 5 大分类模块开关）
+     */
+    private fun showDisplaySettingsDialog() {
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
-        val checkedItems = BooleanArray(categoryKeys.size) { i ->
-            sp.getBoolean("show_cat_${categoryKeys[i].first}", true)
-        }
-        val labels = categoryKeys.map { it.second }.toTypedArray()
+        val dialogBinding = DialogDisplaySettingsBinding.inflate(layoutInflater)
 
-        AlertDialog.Builder(this)
-            .setTitle("分类模块显示开关")
-            .setMultiChoiceItems(labels, checkedItems) { _, which, isChecked ->
-                checkedItems[which] = isChecked
-            }
-            .setPositiveButton("保存") { _, _ ->
-                val editor = sp.edit()
-                categoryKeys.forEachIndexed { index, pair ->
-                    editor.putBoolean("show_cat_${pair.first}", checkedItems[index])
-                }
-                editor.apply()
-                filterAndDisplayList()
-                Toast.makeText(this, "设置已保存", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("取消", null)
-            .show()
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogBinding.root)
+            .create()
+
+        // 1. 初始化实时机构勾选状态
+        dialogBinding.cbBankIcbc.isChecked = sp.getBoolean("bank_enabled_icbc", true)
+        dialogBinding.cbBankZs.isChecked = sp.getBoolean("bank_enabled_zs", true)
+        dialogBinding.cbBankMs.isChecked = sp.getBoolean("bank_enabled_ms", true)
+        dialogBinding.cbBankCgb.isChecked = sp.getBoolean("bank_enabled_cgb", true)
+        dialogBinding.cbBankCib.isChecked = sp.getBoolean("bank_enabled_cib", true)
+        dialogBinding.cbBankJd.isChecked = sp.getBoolean("bank_enabled_jd", true)
+        dialogBinding.cbBankGj.isChecked = sp.getBoolean("bank_enabled_gj", true)
+
+        // 2. 初始化分类模块勾选状态
+        dialogBinding.cbCatRealtime.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_REALTIME}", true)
+        dialogBinding.cbCatBanks.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_BANKS}", true)
+        dialogBinding.cbCatStores.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_STORES}", true)
+        dialogBinding.cbCatMetals.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_METALS}", true)
+        dialogBinding.cbCatRecycle.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", true)
+
+        // 全选 / 反选机构快捷按钮
+        val bankCheckBoxes = listOf(
+            dialogBinding.cbBankIcbc,
+            dialogBinding.cbBankZs,
+            dialogBinding.cbBankMs,
+            dialogBinding.cbBankCgb,
+            dialogBinding.cbBankCib,
+            dialogBinding.cbBankJd,
+            dialogBinding.cbBankGj
+        )
+        dialogBinding.btnToggleAllBanks.setOnClickListener {
+            val allChecked = bankCheckBoxes.all { it.isChecked }
+            bankCheckBoxes.forEach { it.isChecked = !allChecked }
+        }
+
+        // 取消按钮
+        dialogBinding.btnDialogCancel.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        // 保存并应用按钮
+        dialogBinding.btnDialogSave.setOnClickListener {
+            sp.edit()
+                // 保存银行开关
+                .putBoolean("bank_enabled_icbc", dialogBinding.cbBankIcbc.isChecked)
+                .putBoolean("bank_enabled_zs", dialogBinding.cbBankZs.isChecked)
+                .putBoolean("bank_enabled_ms", dialogBinding.cbBankMs.isChecked)
+                .putBoolean("bank_enabled_cgb", dialogBinding.cbBankCgb.isChecked)
+                .putBoolean("bank_enabled_cib", dialogBinding.cbBankCib.isChecked)
+                .putBoolean("bank_enabled_jd", dialogBinding.cbBankJd.isChecked)
+                .putBoolean("bank_enabled_gj", dialogBinding.cbBankGj.isChecked)
+                // 保存分类开关
+                .putBoolean("show_cat_${GoldDataParser.CAT_REALTIME}", dialogBinding.cbCatRealtime.isChecked)
+                .putBoolean("show_cat_${GoldDataParser.CAT_BANKS}", dialogBinding.cbCatBanks.isChecked)
+                .putBoolean("show_cat_${GoldDataParser.CAT_STORES}", dialogBinding.cbCatStores.isChecked)
+                .putBoolean("show_cat_${GoldDataParser.CAT_METALS}", dialogBinding.cbCatMetals.isChecked)
+                .putBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", dialogBinding.cbCatRecycle.isChecked)
+                .apply()
+
+            dialog.dismiss()
+
+            // 即时刷新 UI
+            initTabs()
+            updateTargetSpinner()
+            filterAndDisplayList()
+            fetchGoldDataImmediately()
+
+            Toast.makeText(this, "设置已保存并生效", Toast.LENGTH_SHORT).show()
+        }
+
+        dialog.show()
     }
 
     private fun checkPermissionAndStart() {
@@ -383,12 +541,12 @@ class MainActivity : AppCompatActivity() {
                 action = GoldPriceService.ACTION_START
                 putExtra(GoldPriceService.EXTRA_THRESHOLD, threshold)
                 putExtra(GoldPriceService.EXTRA_INTERVAL_MINUTES, interval)
-                putExtra(GoldPriceService.EXTRA_TARGET_ID, target?.id ?: "")
-                putExtra(GoldPriceService.EXTRA_TARGET_NAME, target?.displayName ?: "[大盘] 今日金价")
+                putExtra(GoldPriceService.EXTRA_TARGET_ID, target?.id ?: "realtime_icbc")
+                putExtra(GoldPriceService.EXTRA_TARGET_NAME, target?.displayName ?: "[实时] 工商银行")
             }
 
             ContextCompat.startForegroundService(this, intent)
-            Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】实时监控", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】高频监控", Toast.LENGTH_SHORT).show()
         } catch (t: Throwable) {
             Log.e("MainActivity", "startMonitoring failed: ${t.message}", t)
             // 全量防崩溃：启动异常时自动重置运行状态，绝不导致死循环闪退
@@ -453,12 +611,15 @@ class MainActivity : AppCompatActivity() {
             binding.tvCurrentTargetTitle.text = state.targetTitle
         }
         if (state.targetPrice != null && state.targetPrice > 0) {
-            binding.tvTargetPrice.text = "¥ %.2f /克".format(state.targetPrice)
+            val symbol = if (state.targetTitle.contains("伦敦金") || state.targetId == "realtime_gj") "$" else "¥"
+            val unit = if (state.targetId == "realtime_gj") "美元/盎司" else "元/克"
+            binding.tvTargetPrice.text = "$symbol %.2f %s".format(state.targetPrice, unit)
         }
 
         // 4. 设定阈值与刷新频率
         if (state.targetThreshold != null && state.targetThreshold > 0) {
-            binding.tvCurrentThreshold.text = "¥ %.2f /克".format(state.targetThreshold)
+            val symbol = if (state.targetTitle.contains("伦敦金") || state.targetId == "realtime_gj") "$" else "¥"
+            binding.tvCurrentThreshold.text = "$symbol %.2f".format(state.targetThreshold)
             if (binding.etThreshold.text.isNullOrBlank()) {
                 binding.etThreshold.setText("%.2f".format(state.targetThreshold))
             }
