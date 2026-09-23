@@ -24,13 +24,9 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
  * 金价后台轮询与多品类精准监控服务
@@ -67,7 +63,7 @@ class GoldPriceService : Service() {
         const val NOTIFICATION_MONITOR_ID = 1001
         const val NOTIFICATION_ALERT_ID = 2001
 
-        // 数据持久化
+        // 数据持久化常量
         const val PREFS_NAME = "gold_price_prefs"
         const val KEY_IS_RUNNING = "is_running"
         const val KEY_TARGET_ID = "target_id"
@@ -78,10 +74,6 @@ class GoldPriceService : Service() {
         const val KEY_UPDATE_TIME = "update_time"
         const val KEY_STATUS_MESSAGE = "status_message"
         const val KEY_ALL_ITEMS_JSON = "all_items_json"
-
-        // 综合 API 地址
-        private const val API_URL = "https://tmini.net/api/gold-price?type=json"
-        private const val BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
         private val _monitorState = MutableStateFlow(MonitorState())
         val monitorState = _monitorState.asStateFlow()
@@ -120,14 +112,6 @@ class GoldPriceService : Service() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var pollJob: Job? = null
-
-    private val okHttpClient by lazy {
-        OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .followRedirects(true)
-            .build()
-    }
 
     private val notificationManager by lazy {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -321,7 +305,7 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 核心网络拉取与指定标的预警比对
+     * 核心网络拉取与指定标的预警比对（复用 GoldRepository）
      */
     private suspend fun fetchPriceAndEvaluate() {
         val wakeLock = powerManager.newWakeLock(
@@ -331,34 +315,15 @@ class GoldPriceService : Service() {
         try {
             wakeLock.acquire(30_000L) // 30 秒超时保护
 
-            val request = Request.Builder()
-                .url(API_URL)
-                .header("User-Agent", BROWSER_UA)
-                .header("Accept", "application/json, text/plain, */*")
-                .get()
-                .build()
-
-            val response = withContext(Dispatchers.IO) {
-                okHttpClient.newCall(request).execute()
+            val (allItems, jsonString) = GoldRepository.fetchGoldData()
+            if (allItems.isNotEmpty()) {
+                handleParsedData(allItems, jsonString)
+            } else {
+                handleFetchError("解析后无有效行情条目")
             }
-
-            if (response.isSuccessful) {
-                val jsonString = response.body?.string()
-                if (!jsonString.isNullOrEmpty()) {
-                    val allItems = GoldDataParser.parseJson(jsonString)
-                    if (allItems.isNotEmpty()) {
-                        handleParsedData(allItems, jsonString)
-                        return
-                    }
-                }
-            }
-
-            // 拉取或解析失败处理
-            val errorMsg = "HTTP ${response.code} 接口响应异常"
-            handleFetchError(errorMsg)
         } catch (t: Throwable) {
             Log.e(TAG, "Fetch failed: ${t.message}", t)
-            handleFetchError(formatThrowable(t))
+            handleFetchError(t.message ?: t.javaClass.simpleName)
         } finally {
             try {
                 if (wakeLock.isHeld) wakeLock.release()
@@ -430,16 +395,6 @@ class GoldPriceService : Service() {
             priceText = "【$targetTitle】金价拉取失败",
             detailText = "$errorMsg (重试等待中 $timeFormatted)"
         )
-    }
-
-    private fun formatThrowable(t: Throwable): String {
-        return when {
-            t is java.net.SocketTimeoutException -> "网络超时"
-            t is java.net.UnknownHostException -> "无法解析域名"
-            t is java.net.ConnectException -> "连接被拒绝"
-            t is SecurityException -> "权限拦截"
-            else -> t.localizedMessage ?: t.javaClass.simpleName
-        }
     }
 
     private fun saveStateToPrefs(state: MonitorState, rawJson: String?) {

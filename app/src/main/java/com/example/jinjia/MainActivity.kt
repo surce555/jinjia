@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
@@ -23,7 +24,9 @@ import androidx.lifecycle.repeatOnLifecycle
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.example.jinjia.databinding.ActivityMainBinding
 import com.google.android.material.tabs.TabLayout
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -77,6 +80,9 @@ class MainActivity : AppCompatActivity() {
         initTabs()
         initViews()
         observeServiceState()
+
+        // 核心改造：冷启动自动异步拉取全网最新数据并刷新界面与下拉框
+        fetchGoldDataImmediately()
     }
 
     override fun onResume() {
@@ -89,15 +95,71 @@ class MainActivity : AppCompatActivity() {
             allItemsList = saved.allItems
             updateTargetSpinner()
             filterAndDisplayList()
+        } else if (allItemsList.isEmpty()) {
+            fetchGoldDataImmediately()
         }
 
         // 2. 检查电池优化白名单
         checkBatteryOptimization()
     }
 
+    /**
+     * 进入 App 时的冷启动即时拉取逻辑（无需点击启动监控）
+     */
+    private fun fetchGoldDataImmediately() {
+        val currentState = GoldPriceService.monitorState.value
+        if (!currentState.isRunning) {
+            binding.tvServiceStatus.text = "正在拉取最新行情..."
+            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.gold_primary_dark))
+        }
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val (items, rawJson) = GoldRepository.fetchGoldData()
+
+                // 持久化保存
+                val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+                sp.edit()
+                    .putString(GoldPriceService.KEY_ALL_ITEMS_JSON, rawJson)
+                    .putLong(GoldPriceService.KEY_UPDATE_TIME, System.currentTimeMillis())
+                    .apply()
+
+                withContext(Dispatchers.Main) {
+                    allItemsList = items
+                    updateTargetSpinner()
+                    filterAndDisplayList()
+
+                    // 默认选第一项
+                    if (selectedTargetItem == null && items.isNotEmpty()) {
+                        setTargetItem(items.first())
+                    }
+
+                    val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                    binding.tvUpdateTime.text = sdf.format(Date())
+
+                    val running = GoldPriceService.monitorState.value.isRunning
+                    if (!running) {
+                        binding.tvServiceStatus.text = "已更新最新行情 (${items.size}项)"
+                        binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_green))
+                    }
+                }
+            } catch (t: Throwable) {
+                Log.e("MainActivity", "fetchGoldDataImmediately failed: ${t.message}", t)
+                withContext(Dispatchers.Main) {
+                    val running = GoldPriceService.monitorState.value.isRunning
+                    if (!running) {
+                        binding.tvServiceStatus.text = "拉取异常: ${t.message}"
+                        binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
+                    }
+                    Toast.makeText(this@MainActivity, "拉取失败: ${t.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
     private fun initRecyclerView() {
         goldItemAdapter = GoldItemAdapter { item ->
-            // 点击设为监控标的
+            // 点击列表项目设为盯盘标的
             setTargetItem(item)
             Toast.makeText(this, "已将【${item.displayName}】选为盯盘标的", Toast.LENGTH_SHORT).show()
         }
@@ -166,7 +228,7 @@ class MainActivity : AppCompatActivity() {
             binding.spTarget.setSelection(idx)
         }
 
-        // 若当前输入框为空或用户尚未设置，推荐预填当前价少 5 元作为默认参考阈值
+        // 若当前输入框为空，推荐预填当前价少 5 元作为默认参考阈值
         if (binding.etThreshold.text.isNullOrBlank()) {
             val suggested = (item.price - 5.0).coerceAtLeast(1.0)
             binding.etThreshold.setText("%.2f".format(suggested))
@@ -182,12 +244,13 @@ class MainActivity : AppCompatActivity() {
         }
         binding.spTarget.adapter = adapter
 
-        // 尝试恢复之前选中的标的
+        // 默认恢复已选或第 1 项
         val saved = GoldPriceService.getSavedState(this)
-        val selectedIdx = allItemsList.indexOfFirst { it.id == saved.targetId }.let {
+        val selectedIdx = allItemsList.indexOfFirst { it.id == (selectedTargetItem?.id ?: saved.targetId) }.let {
             if (it >= 0) it else 0
         }
         binding.spTarget.setSelection(selectedIdx)
+        selectedTargetItem = allItemsList.getOrNull(selectedIdx)
 
         binding.spTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
@@ -195,6 +258,10 @@ class MainActivity : AppCompatActivity() {
                     val item = allItemsList[position]
                     selectedTargetItem = item
                     binding.tvCurrentTargetTitle.text = item.displayName
+                    val running = GoldPriceService.monitorState.value.isRunning
+                    if (!running) {
+                        binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
+                    }
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -323,11 +390,14 @@ class MainActivity : AppCompatActivity() {
 
         // 2. 状态标签
         if (state.isRunning) {
-            binding.tvServiceStatus.text = "监控中 (%.1fm)".format(state.intervalMinutes)
+            binding.tvServiceStatus.text = "监控中 (%.1fm 轮询)".format(state.intervalMinutes)
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
         } else {
-            binding.tvServiceStatus.text = "已停止"
-            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+            // 未运行时若有状态文本则显示（如已更新最新行情或报错）
+            if (binding.tvServiceStatus.text == "未运行" || binding.tvServiceStatus.text == "已停止") {
+                binding.tvServiceStatus.text = state.statusMessage
+                binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+            }
         }
 
         // 3. 标的名称与单价
@@ -353,8 +423,6 @@ class MainActivity : AppCompatActivity() {
         if (state.updateTime != null && state.updateTime > 0) {
             val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
             binding.tvUpdateTime.text = sdf.format(Date(state.updateTime))
-        } else {
-            binding.tvUpdateTime.text = "尚未拉取"
         }
     }
 
