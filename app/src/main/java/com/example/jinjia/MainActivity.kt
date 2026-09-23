@@ -50,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private val allTargetsList = mutableListOf<GoldItem>()
     private var selectedTargetItem: GoldItem? = null
     private var currentSelectedCategory: String = GoldDataParser.CAT_REALTIME
+    private var mainDashboardChartPoints: List<ChartPoint>? = null
 
     // 刷新频率选项映射 (严格限制下限 >= 0.5 分钟/30秒)
     private val intervalOptions = listOf(
@@ -102,6 +103,7 @@ class MainActivity : AppCompatActivity() {
             updateTargetSpinner()
             selectedTargetItem?.let {
                 bindTopCardItem(it)
+                updateMainDashboardChart(it)
             }
 
             observeServiceState()
@@ -198,6 +200,10 @@ class MainActivity : AppCompatActivity() {
                 // 2. 触发全局行情同步
                 fetchGoldDataInternal(isSilent = false)
 
+                if (target != null) {
+                    updateMainDashboardChart(target)
+                }
+
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, "已更新至最新金价", Toast.LENGTH_SHORT).show()
                 }
@@ -212,6 +218,23 @@ class MainActivity : AppCompatActivity() {
                     binding.btnManualRefresh.isEnabled = true
                     binding.btnManualRefresh.text = "🔄 刷新"
                 }
+            }
+        }
+    }
+
+    /**
+     * 刷新主看板日内分时动态走势图
+     */
+    private fun updateMainDashboardChart(target: GoldItem) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                val points = GoldRepository.fetchIntradayChart(target.id)
+                mainDashboardChartPoints = points
+                withContext(Dispatchers.Main) {
+                    binding.chartMainDashboard.setChartData(points, target.unit)
+                }
+            } catch (e: Exception) {
+                Log.w("MainActivity", "updateMainDashboardChart error: ${e.message}")
             }
         }
     }
@@ -335,11 +358,24 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initRecyclerView() {
-        goldItemAdapter = GoldItemAdapter { item ->
-            // 点击列表卡片直接设为盯盘标的并联动 Spinner 与顶部卡片
-            setTargetItem(item)
-            Toast.makeText(this, "已将【${item.displayName}】选为盯盘标的", Toast.LENGTH_SHORT).show()
-        }
+        goldItemAdapter = GoldItemAdapter(
+            onSelectAsTarget = { item ->
+                // 点击列表卡片直接设为盯盘标的并联动 Spinner、顶部卡片与走势图
+                setTargetItem(item)
+                Toast.makeText(this, "已将【${item.displayName}】选为盯盘标的", Toast.LENGTH_SHORT).show()
+            },
+            onCopyAiPrompt = { item, cachedPoints ->
+                copyAiAnalysisPromptForItem(item, cachedPoints)
+            },
+            onFetchChart = { item, callback ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val points = GoldRepository.fetchIntradayChart(item.id)
+                    withContext(Dispatchers.Main) {
+                        callback(points)
+                    }
+                }
+            }
+        )
         binding.rvGoldList.layoutManager = LinearLayoutManager(this)
         binding.rvGoldList.adapter = goldItemAdapter
     }
@@ -417,6 +453,10 @@ class MainActivity : AppCompatActivity() {
             copyAiAnalysisPrompt()
         }
 
+        binding.btnDashboardAiPrompt.setOnClickListener {
+            copyAiAnalysisPrompt()
+        }
+
         // 手动刷新按钮
         binding.btnManualRefresh.setOnClickListener {
             manualRefreshPrice()
@@ -424,7 +464,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 设置当前选中的标的，并立即联动刷新顶部卡片
+     * 设置当前选中的标的，并立即联动刷新顶部卡片与走势图
      */
     private fun setTargetItem(item: GoldItem) {
         selectedTargetItem = item
@@ -440,6 +480,8 @@ class MainActivity : AppCompatActivity() {
             val suggested = (item.price - 5.0).coerceAtLeast(1.0)
             binding.etThreshold.setText("%.2f".format(suggested))
         }
+
+        updateMainDashboardChart(item)
     }
 
     private fun bindTopCardItem(item: GoldItem) {
@@ -508,8 +550,9 @@ class MainActivity : AppCompatActivity() {
                 if (position in displayItems.indices) {
                     val item = displayItems[position]
                     selectedTargetItem = item
-                    // 标的选择立即联动：顶部卡片即时刷新该标的名称与价格
+                    // 标的选择立即联动：顶部卡片即时刷新该标的名称与价格及走势
                     bindTopCardItem(item)
+                    updateMainDashboardChart(item)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -548,17 +591,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 核心功能：异步拉取日内走势并一键组装复制专业 AI 量化分析 Prompt
+     * 核心功能：主看板复制走势给 AI 分析
      */
     private fun copyAiAnalysisPrompt() {
         val item = selectedTargetItem ?: allTargetsList.firstOrNull() ?: return
         binding.btnCopyAiPrompt.isEnabled = false
         binding.btnCopyAiPrompt.text = "⏳ 正在抓取走势数据..."
+        binding.btnDashboardAiPrompt.isEnabled = false
+        binding.btnDashboardAiPrompt.text = "⏳ 分析中"
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
+                copyAiAnalysisPromptForItem(item, mainDashboardChartPoints)
+            } finally {
+                withContext(Dispatchers.Main) {
+                    binding.btnCopyAiPrompt.isEnabled = true
+                    binding.btnCopyAiPrompt.text = "🤖 复制走势给 AI 分析"
+                    binding.btnDashboardAiPrompt.isEnabled = true
+                    binding.btnDashboardAiPrompt.text = "🤖 AI分析"
+                }
+            }
+        }
+    }
+
+    /**
+     * 统一抽取：为任意标的复制专业 AI 量化分析 Prompt
+     */
+    private fun copyAiAnalysisPromptForItem(item: GoldItem, preloadedPoints: List<ChartPoint>?) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
                 // 1. 获取日内走势分时数据
-                val chartPoints = GoldRepository.fetchIntradayChart(item.id)
+                val chartPoints = if (!preloadedPoints.isNullOrEmpty()) {
+                    preloadedPoints
+                } else {
+                    GoldRepository.fetchIntradayChart(item.id)
+                }
                 val sampledPoints = sampleChartPoints(chartPoints, targetCount = 36)
 
                 val highPrice = if (chartPoints.isNotEmpty()) chartPoints.maxOf { it.price } else item.price
@@ -609,15 +676,11 @@ ${sbPoints.toString().trimEnd()}
                     val clip = ClipData.newPlainText("Gold AI Analysis Prompt", prompt)
                     clipboard.setPrimaryClip(clip)
 
-                    binding.btnCopyAiPrompt.isEnabled = true
-                    binding.btnCopyAiPrompt.text = "🤖 复制走势给 AI 分析"
-                    Toast.makeText(this@MainActivity, "已生成专业AI分析提示词，直接去对话框粘贴即可！", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "已生成【${item.displayName}】专业AI量化分析提示词，可直接去对话框粘贴！", Toast.LENGTH_LONG).show()
                 }
             } catch (t: Throwable) {
-                Log.e("MainActivity", "copyAiAnalysisPrompt error: ${t.message}", t)
+                Log.e("MainActivity", "copyAiAnalysisPromptForItem error: ${t.message}", t)
                 withContext(Dispatchers.Main) {
-                    binding.btnCopyAiPrompt.isEnabled = true
-                    binding.btnCopyAiPrompt.text = "🤖 复制走势给 AI 分析"
                     Toast.makeText(this@MainActivity, "走势拉取提示: ${t.message}", Toast.LENGTH_SHORT).show()
                 }
             }

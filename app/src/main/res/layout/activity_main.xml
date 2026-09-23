@@ -4,7 +4,7 @@
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/gold_bg_light"
+    android:background="@drawable/bg_liquid_gradient"
     android:fillViewport="true">
 
     <LinearLayout
@@ -13,14 +13,14 @@
         android:orientation="vertical"
         android:padding="14dp">
 
-        <!-- 顶部盯盘核心仪表盘卡片 -->
+        <!-- 顶部盯盘核心仪表盘卡片 (毛玻璃质感 + 22dp大圆角) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardDashboard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="18dp"
-            app:cardElevation="2dp"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="3dp"
             app:strokeColor="@color/card_stroke"
             app:strokeWidth="1dp">
 
@@ -62,49 +62,57 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:background="@drawable/bg_status_chip_red"
-                        android:paddingHorizontal="10dp"
-                        android:paddingVertical="4dp"
+                        android:paddingHorizontal="12dp"
+                        android:paddingVertical="5dp"
                         android:text="● 未运行"
                         android:textColor="@color/status_red"
                         android:textSize="12sp"
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <!-- 大字号主价格看板与浮动角标 + 手动刷新按钮 -->
-                <LinearLayout
+                <!-- 彻底杜绝截断：使用约束布局的主价格看板与独立液态胶囊刷新按钮 -->
+                <androidx.constraintlayout.widget.ConstraintLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
+                    android:layout_marginTop="12dp">
 
                     <TextView
                         android:id="@+id/tvTargetPrice"
-                        android:layout_width="wrap_content"
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
+                        android:ellipsize="end"
+                        android:maxLines="1"
                         android:text="¥ 932.33 /克"
                         android:textColor="@color/text_primary"
-                        android:textSize="36sp"
-                        android:textStyle="bold" />
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        app:layout_constrainedWidth="true"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintEnd_toStartOf="@id/tvPriceBadge"
+                        app:layout_constraintHorizontal_bias="0"
+                        app:layout_constraintHorizontal_chainStyle="packed"
+                        app:layout_constraintStart_toStartOf="parent"
+                        app:layout_constraintTop_toTopOf="parent" />
 
                     <TextView
                         android:id="@+id/tvPriceBadge"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
+                        android:layout_marginStart="6dp"
+                        android:layout_marginEnd="8dp"
                         android:background="@drawable/bg_price_badge"
-                        android:paddingHorizontal="6dp"
-                        android:paddingVertical="2dp"
+                        android:paddingHorizontal="8dp"
+                        android:paddingVertical="3dp"
                         android:text="高频实盘"
                         android:textColor="@color/gold_primary_dark"
                         android:textSize="11sp"
-                        android:textStyle="bold" />
+                        android:textStyle="bold"
+                        app:layout_constraintBottom_toBottomOf="@id/tvTargetPrice"
+                        app:layout_constraintEnd_toStartOf="@id/btnManualRefresh"
+                        app:layout_constraintStart_toEndOf="@id/tvTargetPrice"
+                        app:layout_constraintTop_toTopOf="@id/tvTargetPrice" />
 
-                    <View
-                        android:layout_width="0dp"
-                        android:layout_height="0dp"
-                        android:layout_weight="1" />
-
+                    <!-- 独立现代液态胶囊刷新按钮 (左图标右文字、防误触、紧贴右侧) -->
                     <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnManualRefresh"
                         style="@style/Widget.MaterialComponents.Button.OutlinedButton"
@@ -119,16 +127,19 @@
                         android:textSize="12sp"
                         android:textStyle="bold"
                         app:cornerRadius="18dp"
+                        app:layout_constraintBottom_toBottomOf="parent"
+                        app:layout_constraintEnd_toEndOf="parent"
+                        app:layout_constraintTop_toTopOf="parent"
                         app:strokeColor="@color/gold_primary"
                         app:strokeWidth="1dp" />
-                </LinearLayout>
+                </androidx.constraintlayout.widget.ConstraintLayout>
 
                 <!-- 极细分割线 -->
                 <View
                     android:layout_width="match_parent"
                     android:layout_height="1dp"
                     android:layout_marginVertical="14dp"
-                    android:background="#F3F4F6" />
+                    android:background="#14000000" />
 
                 <!-- 监控阈值、刷新频率与更新时间指标网格 -->
                 <LinearLayout
@@ -178,9 +189,9 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="2dp"
-                            android:text="5.0 分钟"
+                            android:text="前台1m / 后台5m"
                             android:textColor="@color/text_primary"
-                            android:textSize="14sp"
+                            android:textSize="13sp"
                             android:textStyle="bold" />
                     </LinearLayout>
 
@@ -209,18 +220,65 @@
                             android:textSize="13sp" />
                     </LinearLayout>
                 </LinearLayout>
+
+                <!-- 极细分割线 -->
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginVertical="14dp"
+                    android:background="#14000000" />
+
+                <!-- 主看板常驻日内分时动态走势图 -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="📊 日内高频分时走势"
+                        android:textColor="@color/text_primary"
+                        android:textSize="13sp"
+                        android:textStyle="bold" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnDashboardAiPrompt"
+                        style="@style/Widget.MaterialComponents.Button.TextButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="32dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingHorizontal="8dp"
+                        android:paddingVertical="0dp"
+                        android:text="🤖 AI分析"
+                        android:textColor="@color/gold_primary_dark"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="16dp" />
+                </LinearLayout>
+
+                <!-- 主看板原生分时走势图表控件 -->
+                <com.example.jinjia.ui.GlassTrendChartView
+                    android:id="@+id/chartMainDashboard"
+                    android:layout_width="match_parent"
+                    android:layout_height="150dp"
+                    android:layout_marginTop="6dp" />
+
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 监控设置与 AI 辅助分析核心操作卡片 -->
+        <!-- 监控设置与 AI 辅助分析核心操作卡片 (22dp 毛玻璃) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardControl"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="18dp"
-            app:cardElevation="2dp"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="3dp"
             app:strokeColor="@color/card_stroke"
             app:strokeWidth="1dp">
 
@@ -245,7 +303,7 @@
                     android:layout_height="48dp"
                     android:layout_marginTop="6dp"
                     android:background="@drawable/bg_spinner_outline"
-                    android:paddingHorizontal="4dp">
+                    android:paddingHorizontal="6dp">
 
                     <Spinner
                         android:id="@+id/spTarget"
@@ -268,10 +326,10 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:hint="预警阈值(元/克)"
-                        app:boxCornerRadiusBottomEnd="12dp"
-                        app:boxCornerRadiusBottomStart="12dp"
-                        app:boxCornerRadiusTopEnd="12dp"
-                        app:boxCornerRadiusTopStart="12dp"
+                        app:boxCornerRadiusBottomEnd="14dp"
+                        app:boxCornerRadiusBottomStart="14dp"
+                        app:boxCornerRadiusTopEnd="14dp"
+                        app:boxCornerRadiusTopStart="14dp"
                         app:boxStrokeColor="@color/gold_primary"
                         app:hintTextColor="@color/gold_primary_dark">
 
@@ -304,7 +362,7 @@
                             android:layout_height="52dp"
                             android:layout_marginTop="4dp"
                             android:background="@drawable/bg_spinner_outline"
-                            android:paddingHorizontal="4dp">
+                            android:paddingHorizontal="6dp">
 
                             <Spinner
                                 android:id="@+id/spInterval"
@@ -384,15 +442,15 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 行情浏览区域卡片 -->
+        <!-- 行情浏览区域卡片 (22dp 毛玻璃 + 解决 Tab 挤扁的水平滑动 Tab) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardMarket"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="14dp"
             app:cardBackgroundColor="@color/card_background"
-            app:cardCornerRadius="18dp"
-            app:cardElevation="2dp"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="3dp"
             app:strokeColor="@color/card_stroke"
             app:strokeWidth="1dp">
 
@@ -401,13 +459,17 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical">
 
+                <!-- 修复最后一项图标挤扁：采用 scrollable 模式与舒适内边距 -->
                 <com.google.android.material.tabs.TabLayout
                     android:id="@+id/tabLayout"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    app:tabGravity="start"
                     app:tabIndicatorColor="@color/gold_primary"
                     app:tabIndicatorHeight="3dp"
-                    app:tabMode="auto"
+                    app:tabMode="scrollable"
+                    app:tabPaddingEnd="16dp"
+                    app:tabPaddingStart="16dp"
                     app:tabSelectedTextColor="@color/gold_primary_dark"
                     app:tabTextColor="@color/text_secondary" />
 

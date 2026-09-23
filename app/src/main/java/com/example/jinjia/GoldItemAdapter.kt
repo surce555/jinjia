@@ -1,6 +1,7 @@
 package com.example.jinjia
 
 import android.view.LayoutInflater
+import android.view.View
 import android.view.ViewGroup
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.ListAdapter
@@ -8,11 +9,16 @@ import androidx.recyclerview.widget.RecyclerView
 import com.example.jinjia.databinding.ItemGoldPriceBinding
 
 /**
- * 金价列表适配器
+ * 金价列表适配器（支持毛玻璃卡片、折叠/展开内嵌原生走势图表与专属 AI 量化分析复制）
  */
 class GoldItemAdapter(
-    private val onSelectAsTarget: (GoldItem) -> Unit
+    private val onSelectAsTarget: (GoldItem) -> Unit,
+    private val onCopyAiPrompt: (GoldItem, List<ChartPoint>?) -> Unit,
+    private val onFetchChart: (GoldItem, (List<ChartPoint>) -> Unit) -> Unit
 ) : ListAdapter<GoldItem, GoldItemAdapter.ViewHolder>(DiffCallback) {
+
+    private val expandedItemIds = mutableSetOf<String>()
+    private val chartCache = mutableMapOf<String, List<ChartPoint>>()
 
     inner class ViewHolder(val binding: ItemGoldPriceBinding) : RecyclerView.ViewHolder(binding.root) {
         fun bind(item: GoldItem) {
@@ -21,11 +27,53 @@ class GoldItemAdapter(
             binding.tvItemPrice.text = item.priceDisplay
             binding.tvItemTime.text = if (item.updateTime.isNotBlank()) "更新: ${item.updateTime}" else ""
 
+            val isExpanded = expandedItemIds.contains(item.id)
+            if (isExpanded) {
+                binding.layoutChartContainer.visibility = View.VISIBLE
+                binding.btnToggleChart.text = "📈 收起"
+
+                val points = chartCache[item.id]
+                if (points != null) {
+                    binding.chartItemTrend.setChartData(points, item.unit)
+                } else {
+                    binding.chartItemTrend.setChartData(emptyList(), item.unit)
+                    onFetchChart(item) { fetched ->
+                        chartCache[item.id] = fetched
+                        val pos = bindingAdapterPosition
+                        if (pos != RecyclerView.NO_POSITION) {
+                            notifyItemChanged(pos)
+                        }
+                    }
+                }
+            } else {
+                binding.layoutChartContainer.visibility = View.GONE
+                binding.btnToggleChart.text = "📈 走势"
+            }
+
+            // 折叠/展开走势图表
+            binding.btnToggleChart.setOnClickListener {
+                val pos = bindingAdapterPosition
+                if (pos == RecyclerView.NO_POSITION) return@setOnClickListener
+
+                if (expandedItemIds.contains(item.id)) {
+                    expandedItemIds.remove(item.id)
+                } else {
+                    expandedItemIds.add(item.id)
+                }
+                notifyItemChanged(pos)
+            }
+
+            // 设为盯盘标的
             binding.btnSetMonitor.setOnClickListener {
                 onSelectAsTarget(item)
             }
             binding.root.setOnClickListener {
                 onSelectAsTarget(item)
+            }
+
+            // 专属 AI 量化分析复制
+            binding.btnItemAiPrompt.setOnClickListener {
+                onCopyAiPrompt(item, chartCache[item.id])
             }
         }
     }
