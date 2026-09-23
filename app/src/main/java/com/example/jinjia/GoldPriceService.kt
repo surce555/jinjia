@@ -27,24 +27,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
 /**
- * 金价后台轮询与前台通知服务
- * 集成 AlarmManager 深度休眠唤醒、双接口容错、SharedPreferences 持久化及边缘触发锁屏告警
+ * 金价后台轮询与多品类精准监控服务
  */
 class GoldPriceService : Service() {
 
     data class MonitorState(
         val isRunning: Boolean = false,
-        val currentPrice: Double? = null,
+        val targetId: String = "",
+        val targetTitle: String = "未选择标的",
+        val targetPrice: Double? = null,
         val targetThreshold: Double? = null,
+        val intervalMinutes: Double = 5.0,
         val updateTime: Long? = null,
-        val statusMessage: String = "未运行"
+        val statusMessage: String = "未运行",
+        val allItems: List<GoldItem> = emptyList()
     )
 
     companion object {
@@ -53,7 +55,11 @@ class GoldPriceService : Service() {
         const val ACTION_START = "com.example.jinjia.ACTION_START"
         const val ACTION_POLL = "com.example.jinjia.ACTION_POLL"
         const val ACTION_STOP = "com.example.jinjia.ACTION_STOP"
+
+        const val EXTRA_TARGET_ID = "extra_target_id"
+        const val EXTRA_TARGET_NAME = "extra_target_name"
         const val EXTRA_THRESHOLD = "extra_threshold"
+        const val EXTRA_INTERVAL_MINUTES = "extra_interval_minutes"
 
         const val CHANNEL_MONITOR_ID = "gold_monitor_channel"
         const val CHANNEL_ALERT_ID = "gold_alert_channel"
@@ -61,43 +67,52 @@ class GoldPriceService : Service() {
         const val NOTIFICATION_MONITOR_ID = 1001
         const val NOTIFICATION_ALERT_ID = 2001
 
-        private const val POLL_INTERVAL_MS = 5 * 60 * 1000L // 5 分钟
+        // 数据持久化
+        const val PREFS_NAME = "gold_price_prefs"
+        const val KEY_IS_RUNNING = "is_running"
+        const val KEY_TARGET_ID = "target_id"
+        const val KEY_TARGET_TITLE = "target_title"
+        const val KEY_TARGET_PRICE = "target_price"
+        const val KEY_TARGET_THRESHOLD = "target_threshold"
+        const val KEY_INTERVAL_MINUTES = "interval_minutes"
+        const val KEY_UPDATE_TIME = "update_time"
+        const val KEY_STATUS_MESSAGE = "status_message"
+        const val KEY_ALL_ITEMS_JSON = "all_items_json"
 
-        // 数据持久化常量
-        private const val PREFS_NAME = "gold_price_prefs"
-        private const val KEY_IS_RUNNING = "is_running"
-        private const val KEY_CURRENT_PRICE = "current_price"
-        private const val KEY_TARGET_THRESHOLD = "target_threshold"
-        private const val KEY_UPDATE_TIME = "update_time"
-        private const val KEY_STATUS_MESSAGE = "status_message"
-
-        // 数据源配置
-        private const val JD_API_URL = "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
-        private const val SINA_API_URL = "https://hq.sinajs.cn/list=gds_au9999,gds_AUTD"
-
+        // 综合 API 地址
+        private const val API_URL = "https://tmini.net/api/gold-price?type=json"
         private const val BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
         private val _monitorState = MutableStateFlow(MonitorState())
         val monitorState = _monitorState.asStateFlow()
 
         /**
-         * 供外部（如 MainActivity.onResume）直接读取已持久化的最新数据
+         * 供外部（如 MainActivity.onResume）读取本地缓存状态
          */
         fun getSavedState(context: Context): MonitorState {
             val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val isRunning = sp.getBoolean(KEY_IS_RUNNING, false)
-            val priceStr = sp.getString(KEY_CURRENT_PRICE, null)
-            val currentPrice = priceStr?.toDoubleOrNull()
+            val targetId = sp.getString(KEY_TARGET_ID, "") ?: ""
+            val targetTitle = sp.getString(KEY_TARGET_TITLE, "今日金价") ?: "今日金价"
+            val priceStr = sp.getString(KEY_TARGET_PRICE, null)
+            val targetPrice = priceStr?.toDoubleOrNull()
             val threshold = sp.getFloat(KEY_TARGET_THRESHOLD, 0f).toDouble()
+            val intervalMinutes = sp.getFloat(KEY_INTERVAL_MINUTES, 5.0f).toDouble()
             val updateTime = sp.getLong(KEY_UPDATE_TIME, 0L)
             val statusMsg = sp.getString(KEY_STATUS_MESSAGE, if (isRunning) "正在监控中" else "未运行") ?: "未运行"
+            val json = sp.getString(KEY_ALL_ITEMS_JSON, null) ?: ""
+            val allItems = GoldDataParser.parseJson(json)
 
             return MonitorState(
                 isRunning = isRunning,
-                currentPrice = currentPrice,
+                targetId = targetId,
+                targetTitle = targetTitle,
+                targetPrice = targetPrice,
                 targetThreshold = if (threshold > 0) threshold else null,
+                intervalMinutes = intervalMinutes.coerceAtLeast(0.5),
                 updateTime = if (updateTime > 0) updateTime else null,
-                statusMessage = statusMsg
+                statusMessage = statusMsg,
+                allItems = allItems
             )
         }
     }
@@ -126,34 +141,45 @@ class GoldPriceService : Service() {
         getSystemService(Context.ALARM_SERVICE) as AlarmManager
     }
 
-    // 告警状态机标志位（边缘触发）
-    private var hasAlerted: Boolean = false
+    // 监控与告警状态机参数
+    private var targetId: String = ""
+    private var targetTitle: String = "今日金价"
     private var targetThreshold: Double = 0.0
+    private var intervalMinutes: Double = 5.0
+    private var hasAlerted: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannels()
 
-        // 从持久化存储还原状态
+        // 还原本地持久化参数
         val saved = getSavedState(this)
-        if (saved.targetThreshold != null) {
-            targetThreshold = saved.targetThreshold
-        }
+        targetId = saved.targetId
+        targetTitle = saved.targetTitle
+        if (saved.targetThreshold != null) targetThreshold = saved.targetThreshold
+        intervalMinutes = saved.intervalMinutes
         _monitorState.value = saved
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
+                val newTargetId = intent.getStringExtra(EXTRA_TARGET_ID) ?: ""
+                val newTargetName = intent.getStringExtra(EXTRA_TARGET_NAME) ?: ""
                 val threshold = intent.getDoubleExtra(EXTRA_THRESHOLD, 0.0)
+                val interval = intent.getDoubleExtra(EXTRA_INTERVAL_MINUTES, 5.0)
+
+                if (newTargetId.isNotBlank()) targetId = newTargetId
+                if (newTargetName.isNotBlank()) targetTitle = newTargetName
                 if (threshold > 0) {
                     targetThreshold = threshold
-                    hasAlerted = false // 重新设定阈值时重置状态
+                    hasAlerted = false // 重新设置阈值时复位告警状态机
                 }
+                intervalMinutes = interval.coerceAtLeast(0.5)
+
                 startMonitorService()
             }
             ACTION_POLL -> {
-                // 由 AlarmManager 定时闹钟触发深度唤醒轮询
                 if (_monitorState.value.isRunning) {
                     Log.i(TAG, "Alarm triggered: executing scheduled poll in Doze mode")
                     triggerPoll()
@@ -168,8 +194,8 @@ class GoldPriceService : Service() {
 
     private fun startMonitorService() {
         val initialNotification = buildMonitorNotification(
-            priceText = "正在拉取最新金价...",
-            detailText = "监控阈值: ¥%.2f /克".format(targetThreshold)
+            priceText = "【$targetTitle】正在拉取最新金价...",
+            detailText = "监控阈值: ¥%.2f /克 | 间隔: %.1f分钟".format(targetThreshold, intervalMinutes)
         )
 
         // 启动前台服务（适配 Android 14+ dataSync 类型）
@@ -186,13 +212,16 @@ class GoldPriceService : Service() {
 
         val updatedState = _monitorState.value.copy(
             isRunning = true,
+            targetId = targetId,
+            targetTitle = targetTitle,
             targetThreshold = targetThreshold,
-            statusMessage = "正在初始化抓取数据..."
+            intervalMinutes = intervalMinutes,
+            statusMessage = "正在初始化全网金价..."
         )
         _monitorState.value = updatedState
-        saveStateToPrefs(updatedState)
+        saveStateToPrefs(updatedState, null)
 
-        // 触发即时首轮抓取（完成后通过 AlarmManager 自动挂起下一次精准闹钟）
+        // 即刻触发首轮异步拉取，后续由 AlarmManager 精准续期
         triggerPoll()
     }
 
@@ -200,32 +229,29 @@ class GoldPriceService : Service() {
         cancelAlarm()
         pollJob?.cancel()
 
-        val stoppedState = MonitorState(
+        val stoppedState = _monitorState.value.copy(
             isRunning = false,
-            currentPrice = _monitorState.value.currentPrice,
+            targetId = targetId,
+            targetTitle = targetTitle,
             targetThreshold = targetThreshold,
-            updateTime = _monitorState.value.updateTime,
+            intervalMinutes = intervalMinutes,
             statusMessage = "监控已停止"
         )
         _monitorState.value = stoppedState
-        saveStateToPrefs(stoppedState)
+        saveStateToPrefs(stoppedState, null)
 
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    /**
-     * 触发异步轮询并编排下一次闹钟唤醒
-     */
     private fun triggerPoll() {
         pollJob?.cancel()
         pollJob = serviceScope.launch {
             try {
                 fetchPriceAndEvaluate()
             } catch (t: Throwable) {
-                Log.e(TAG, "Unhandled exception in triggerPoll: ${t.message}", t)
+                Log.e(TAG, "Exception during poll execution: ${t.message}", t)
             } finally {
-                // 无论成功还是失败，只要服务处于运行中，均设置下一次精确闹钟（防止轮询断流）
                 if (_monitorState.value.isRunning) {
                     scheduleNextAlarm()
                 }
@@ -234,11 +260,12 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 使用 AlarmManager 设定休眠唤醒闹钟（ELAPSED_REALTIME_WAKEUP）
+     * 动态设置下一次 AlarmManager 唤醒闹钟（根据 intervalMinutes 计算，最小 30 秒）
      */
     private fun scheduleNextAlarm() {
         try {
-            val triggerAtMillis = SystemClock.elapsedRealtime() + POLL_INTERVAL_MS
+            val intervalMs = (intervalMinutes * 60 * 1000L).toLong().coerceAtLeast(30_000L)
+            val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMs
             val pendingIntent = getPollPendingIntent()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -262,7 +289,7 @@ class GoldPriceService : Service() {
                     pendingIntent
                 )
             }
-            Log.i(TAG, "Scheduled next AlarmManager wake-up at $triggerAtMillis (in 5 minutes)")
+            Log.i(TAG, "Scheduled next Alarm in ${intervalMs / 1000}s")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to schedule AlarmManager: ${t.message}", t)
         }
@@ -271,9 +298,9 @@ class GoldPriceService : Service() {
     private fun cancelAlarm() {
         try {
             alarmManager.cancel(getPollPendingIntent())
-            Log.i(TAG, "AlarmManager schedule cancelled")
+            Log.i(TAG, "Alarm cancelled")
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to cancel AlarmManager: ${t.message}", t)
+            Log.e(TAG, "Failed to cancel Alarm: ${t.message}", t)
         }
     }
 
@@ -294,8 +321,7 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 核心业务：拉取金价并进行双接口主备容错与判定
-     * 外层包含严密 Throwable 捕获与 30 秒 WakeLock 超时保护
+     * 核心网络拉取与指定标的预警比对
      */
     private suspend fun fetchPriceAndEvaluate() {
         val wakeLock = powerManager.newWakeLock(
@@ -303,237 +329,141 @@ class GoldPriceService : Service() {
             "Jinjia:NetworkWakeLock"
         )
         try {
-            wakeLock.acquire(30_000L) // 30 秒超时保护，防止异常永久持有
+            wakeLock.acquire(30_000L) // 30 秒超时保护
 
-            var fetchedPrice: Double? = null
-            var fetchedTime: Long = System.currentTimeMillis()
-            var sourceName = "京东金融"
-            var lastError: String? = null
+            val request = Request.Builder()
+                .url(API_URL)
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "application/json, text/plain, */*")
+                .get()
+                .build()
 
-            // 1. 首选尝试京东金融接口
-            try {
-                val jdRequest = Request.Builder()
-                    .url(JD_API_URL)
-                    .header("User-Agent", BROWSER_UA)
-                    .header("Accept", "application/json, text/plain, */*")
-                    .header("Referer", "https://m.jdjygold.com/")
-                    .get()
-                    .build()
-
-                val response = withContext(Dispatchers.IO) {
-                    okHttpClient.newCall(jdRequest).execute()
-                }
-
-                if (response.isSuccessful) {
-                    val body = response.body?.string()
-                    if (!body.isNullOrEmpty()) {
-                        val parsed = parseJdResponse(body)
-                        if (parsed != null) {
-                            fetchedPrice = parsed.first
-                            fetchedTime = parsed.second
-                            sourceName = "京东金融"
-                            Log.i(TAG, "Successfully fetched price from JD: $fetchedPrice")
-                        } else {
-                            lastError = "京东数据字段解析为空"
-                        }
-                    } else {
-                        lastError = "京东返回空内容"
-                    }
-                } else {
-                    lastError = "京东返回 HTTP ${response.code}"
-                }
-            } catch (t: Throwable) {
-                val err = formatThrowable(t)
-                Log.e(TAG, "JD API failed: $err", t)
-                lastError = "京东失败($err)"
+            val response = withContext(Dispatchers.IO) {
+                okHttpClient.newCall(request).execute()
             }
 
-            // 2. 若京东接口失败，自动切换新浪黄金现货备用接口
-            if (fetchedPrice == null) {
-                try {
-                    Log.w(TAG, "Switching to fallback Sina gold API...")
-                    val sinaRequest = Request.Builder()
-                        .url(SINA_API_URL)
-                        .header("User-Agent", BROWSER_UA)
-                        .header("Accept", "*/*")
-                        .header("Referer", "https://finance.sina.com.cn")
-                        .get()
-                        .build()
-
-                    val response = withContext(Dispatchers.IO) {
-                        okHttpClient.newCall(sinaRequest).execute()
+            if (response.isSuccessful) {
+                val jsonString = response.body?.string()
+                if (!jsonString.isNullOrEmpty()) {
+                    val allItems = GoldDataParser.parseJson(jsonString)
+                    if (allItems.isNotEmpty()) {
+                        handleParsedData(allItems, jsonString)
+                        return
                     }
-
-                    if (response.isSuccessful) {
-                        val body = response.body?.string()
-                        if (!body.isNullOrEmpty()) {
-                            val parsed = parseSinaResponse(body)
-                            if (parsed != null) {
-                                fetchedPrice = parsed.first
-                                fetchedTime = parsed.second
-                                sourceName = "新浪黄金现货(备用)"
-                                lastError = null // 备用接口拉取成功，清除错误提示
-                                Log.i(TAG, "Successfully fetched price from Sina: $fetchedPrice")
-                            } else {
-                                lastError = "${lastError ?: ""}; 新浪行情解析为空"
-                            }
-                        } else {
-                            lastError = "${lastError ?: ""}; 新浪返回空内容"
-                        }
-                    } else {
-                        lastError = "${lastError ?: ""}; 新浪返回 HTTP ${response.code}"
-                    }
-                } catch (t: Throwable) {
-                    val err = formatThrowable(t)
-                    Log.e(TAG, "Sina API failed: $err", t)
-                    lastError = "${lastError ?: ""}; 新浪失败($err)"
                 }
             }
 
-            // 3. 结果调度与 UI / 通知 / 本地缓存刷新
-            if (fetchedPrice != null) {
-                handleNewPrice(fetchedPrice, fetchedTime, sourceName)
-            } else {
-                val finalErrMsg = lastError ?: "网络拉取金价失败"
-                Log.e(TAG, "All sources failed: $finalErrMsg")
-                val timeFormatted = formatTimestamp(System.currentTimeMillis())
-                val errState = _monitorState.value.copy(
-                    statusMessage = "拉取异常: $finalErrMsg"
-                )
-                _monitorState.value = errState
-                saveStateToPrefs(errState)
-
-                updatePersistentNotification(
-                    priceText = "金价拉取失败",
-                    detailText = "$finalErrMsg (等待重试 $timeFormatted)"
-                )
-            }
+            // 拉取或解析失败处理
+            val errorMsg = "HTTP ${response.code} 接口响应异常"
+            handleFetchError(errorMsg)
         } catch (t: Throwable) {
-            Log.e(TAG, "Outer throwable in fetchPriceAndEvaluate: ${t.message}", t)
+            Log.e(TAG, "Fetch failed: ${t.message}", t)
+            handleFetchError(formatThrowable(t))
         } finally {
             try {
-                if (wakeLock.isHeld) {
-                    wakeLock.release()
-                }
+                if (wakeLock.isHeld) wakeLock.release()
             } catch (t: Throwable) {
                 Log.w(TAG, "Error releasing wake lock: ${t.message}")
             }
         }
     }
 
-    private fun parseJdResponse(body: String): Pair<Double, Long>? {
-        return try {
-            val jsonObject = JSONObject(body)
-            val resultData = jsonObject.optJSONObject("resultData")
-            val datas = resultData?.optJSONObject("datas") ?: return null
-            val priceStr = datas.optString("price")
-            val price = priceStr.toDoubleOrNull() ?: return null
-            val time = datas.optLong("time", System.currentTimeMillis())
-            Pair(price, time)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to parse JD JSON: ${t.message}", t)
-            null
+    private fun handleParsedData(allItems: List<GoldItem>, rawJson: String) {
+        val timestamp = System.currentTimeMillis()
+
+        // 匹配用户指定的监控标的，若未指定则默认选第一个
+        val targetItem = if (targetId.isNotBlank()) {
+            allItems.find { it.id == targetId } ?: allItems.find { it.title.contains(targetTitle) } ?: allItems.first()
+        } else {
+            allItems.first()
         }
+
+        val currentPrice = targetItem.price
+        val currentTitle = targetItem.displayName
+        targetId = targetItem.id
+        targetTitle = currentTitle
+
+        // 1. 边缘触发告警状态机
+        if (targetThreshold > 0) {
+            if (currentPrice < targetThreshold) {
+                if (!hasAlerted) {
+                    sendAlertNotification(currentTitle, currentPrice, targetThreshold)
+                    hasAlerted = true
+                }
+            } else {
+                hasAlerted = false
+            }
+        }
+
+        // 2. 更新状态并持久化
+        val newState = MonitorState(
+            isRunning = true,
+            targetId = targetId,
+            targetTitle = targetTitle,
+            targetPrice = currentPrice,
+            targetThreshold = targetThreshold,
+            intervalMinutes = intervalMinutes,
+            updateTime = timestamp,
+            statusMessage = "监控中（已收录 ${allItems.size} 项行情）",
+            allItems = allItems
+        )
+        _monitorState.value = newState
+        saveStateToPrefs(newState, rawJson)
+
+        // 3. 刷新前台常驻通知
+        val timeFormatted = formatTimestamp(timestamp)
+        updatePersistentNotification(
+            priceText = "【$targetTitle】¥%.2f /克".format(currentPrice),
+            detailText = "阈值: <¥%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
+        )
     }
 
-    private fun parseSinaResponse(body: String): Pair<Double, Long>? {
-        return try {
-            // 解析格式 var hq_str_xxx="...";
-            val pattern = Regex("\"([^\"]+)\"")
-            val matches = pattern.findAll(body)
-            for (match in matches) {
-                val content = match.groupValues[1]
-                if (content.isBlank()) continue
-                val parts = content.split(",")
-                if (parts.isNotEmpty()) {
-                    val price = parts[0].trim().toDoubleOrNull()
-                    if (price != null && price > 0) {
-                        var time = System.currentTimeMillis()
-                        try {
-                            if (parts.size >= 13) {
-                                val dateStr = parts[12].trim()
-                                val timeStr = parts[6].trim()
-                                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                                time = sdf.parse("$dateStr $timeStr")?.time ?: time
-                            }
-                        } catch (_: Throwable) {}
-                        return Pair(price, time)
-                    }
-                }
-            }
-            null
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to parse Sina quote: ${t.message}", t)
-            null
-        }
+    private fun handleFetchError(errorMsg: String) {
+        val timeFormatted = formatTimestamp(System.currentTimeMillis())
+        val errState = _monitorState.value.copy(
+            statusMessage = "拉取异常: $errorMsg"
+        )
+        _monitorState.value = errState
+        saveStateToPrefs(errState, null)
+
+        updatePersistentNotification(
+            priceText = "【$targetTitle】金价拉取失败",
+            detailText = "$errorMsg (重试等待中 $timeFormatted)"
+        )
     }
 
     private fun formatThrowable(t: Throwable): String {
         return when {
             t is java.net.SocketTimeoutException -> "网络超时"
-            t is java.net.UnknownHostException -> "域名解析失败(无网络/DNS错误)"
+            t is java.net.UnknownHostException -> "无法解析域名"
             t is java.net.ConnectException -> "连接被拒绝"
-            t is SecurityException -> "系统权限拦截(SecurityException)"
+            t is SecurityException -> "权限拦截"
             else -> t.localizedMessage ?: t.javaClass.simpleName
         }
     }
 
-    /**
-     * 核心业务：边缘触发告警逻辑判定及数据持久化
-     */
-    private fun handleNewPrice(currentPrice: Double, timestamp: Long, sourceName: String) {
-        // 1. 边缘触发告警状态机
-        if (targetThreshold > 0) {
-            if (currentPrice < targetThreshold) {
-                if (!hasAlerted) {
-                    // 低于阈值且未告警过 -> 触发高优先级横幅告警并唤醒点亮屏幕
-                    sendAlertNotification(currentPrice, targetThreshold)
-                    hasAlerted = true
-                }
-                // 若 hasAlerted == true，则跳过不弹窗（防轰炸）
-            } else {
-                // 价格反弹回阈值及以上 -> 重置标志位，等待下一次下跌穿透
-                hasAlerted = false
-            }
-        }
-
-        // 2. 更新共享状态并持久化写入 SharedPreferences
-        val newState = MonitorState(
-            isRunning = true,
-            currentPrice = currentPrice,
-            targetThreshold = targetThreshold,
-            updateTime = timestamp,
-            statusMessage = "监控中（数据源: $sourceName）"
-        )
-        _monitorState.value = newState
-        saveStateToPrefs(newState)
-
-        // 3. 刷新常驻前台通知
-        val timeFormatted = formatTimestamp(timestamp)
-        updatePersistentNotification(
-            priceText = "实时金价: ¥%.2f /克".format(currentPrice),
-            detailText = "目标: <¥%.2f | 来源: %s (%s)".format(targetThreshold, sourceName, timeFormatted)
-        )
-    }
-
-    private fun saveStateToPrefs(state: MonitorState) {
+    private fun saveStateToPrefs(state: MonitorState, rawJson: String?) {
         try {
             val sp = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            sp.edit()
+            val editor = sp.edit()
                 .putBoolean(KEY_IS_RUNNING, state.isRunning)
-                .putString(KEY_CURRENT_PRICE, state.currentPrice?.toString())
+                .putString(KEY_TARGET_ID, state.targetId)
+                .putString(KEY_TARGET_TITLE, state.targetTitle)
+                .putString(KEY_TARGET_PRICE, state.targetPrice?.toString())
                 .putFloat(KEY_TARGET_THRESHOLD, (state.targetThreshold ?: 0.0).toFloat())
+                .putFloat(KEY_INTERVAL_MINUTES, state.intervalMinutes.toFloat())
                 .putLong(KEY_UPDATE_TIME, state.updateTime ?: 0L)
                 .putString(KEY_STATUS_MESSAGE, state.statusMessage)
-                .apply()
+
+            if (!rawJson.isNullOrBlank()) {
+                editor.putString(KEY_ALL_ITEMS_JSON, rawJson)
+            }
+            editor.apply()
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to save state to SharedPreferences: ${t.message}", t)
         }
     }
 
-    /**
-     * 点亮屏幕（持续 5 秒），使手机在锁屏黑屏状态下能够直接亮屏展示通知
-     */
     @Suppress("DEPRECATION")
     private fun wakeUpScreen() {
         try {
@@ -541,30 +471,24 @@ class GoldPriceService : Service() {
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
                 "Jinjia:AlertScreenWakeLock"
             )
-            screenWakeLock.acquire(5_000L) // 5 秒后自动释放
-            Log.i(TAG, "Screen wake lock acquired for 5 seconds to show alert")
+            screenWakeLock.acquire(5_000L)
         } catch (t: Throwable) {
             Log.e(TAG, "Failed to wake up screen: ${t.message}", t)
         }
     }
 
-    /**
-     * 发送高优先级横幅通知（带声音和振动，锁屏完全可见并唤醒点亮屏幕）
-     */
-    private fun sendAlertNotification(price: Double, threshold: Double) {
-        // 1. 锁屏点亮屏幕
+    private fun sendAlertNotification(title: String, price: Double, threshold: Double) {
         wakeUpScreen()
 
-        // 2. 构建并弹出通知
         val pendingIntent = createContentPendingIntent()
 
         val alertNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
             .setSmallIcon(R.drawable.ic_gold)
-            .setContentTitle("【低价告警】金价已下跌破位！")
-            .setContentText("当前实时金价 ¥%.2f /克，已跌破监控阈值 ¥%.2f /克！".format(price, threshold))
+            .setContentTitle("【低价告警】$title 跌破阈值！")
+            .setContentText("【$title】当前实时金价 ¥%.2f /克，已跌破监控阈值 ¥%.2f /克！".format(price, threshold))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // 锁屏完全公开展示
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
@@ -573,9 +497,6 @@ class GoldPriceService : Service() {
         notificationManager.notify(NOTIFICATION_ALERT_ID, alertNotification)
     }
 
-    /**
-     * 刷新前台常驻通知内容
-     */
     private fun updatePersistentNotification(priceText: String, detailText: String) {
         val notification = buildMonitorNotification(priceText, detailText)
         notificationManager.notify(NOTIFICATION_MONITOR_ID, notification)
@@ -590,7 +511,7 @@ class GoldPriceService : Service() {
             .setContentText(detailText)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC) // 锁屏公开展示
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(pendingIntent)
             .build()
@@ -610,7 +531,6 @@ class GoldPriceService : Service() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // 常驻监控渠道（Low 重要度，无声息，锁屏完全可见）
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_ID,
                 getString(R.string.notification_channel_monitor_name),
@@ -621,7 +541,6 @@ class GoldPriceService : Service() {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
 
-            // 告警渠道（High 重要度，悬浮横幅、振动与铃声，锁屏完全可见）
             val alertChannel = NotificationChannel(
                 CHANNEL_ALERT_ID,
                 getString(R.string.notification_channel_alert_name),
@@ -654,14 +573,11 @@ class GoldPriceService : Service() {
         super.onDestroy()
         cancelAlarm()
         serviceScope.cancel()
-        val stoppedState = MonitorState(
+        val stoppedState = _monitorState.value.copy(
             isRunning = false,
-            currentPrice = _monitorState.value.currentPrice,
-            targetThreshold = targetThreshold,
-            updateTime = _monitorState.value.updateTime,
             statusMessage = "服务已终止"
         )
         _monitorState.value = stoppedState
-        saveStateToPrefs(stoppedState)
+        saveStateToPrefs(stoppedState, null)
     }
 }
