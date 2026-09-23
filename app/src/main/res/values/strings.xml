@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">金价盯盘</string>
+    <string name="title_monitor">实时金价监控</string>
+    <string name="hint_threshold">请输入监控报警阈值 (元/克)</string>
+    <string name="btn_start_monitor">启动监控</string>
+    <string name="btn_stop_monitor">停止监控</string>
+    <string name="label_current_status">监控状态：</string>
+    <string name="label_latest_price">最新金价：</string>
+    <string name="label_target_threshold">设定阈值：</string>
+    <string name="label_update_time">更新时间：</string>
+    <string name="status_stopped">未启动</string>
+    <string name="status_running">正在监控（每5分钟轮询）</string>
+    <string name="price_unit">¥ %1$s /克</string>
+    <string name="notification_channel_monitor_name">金价前台常驻监控</string>
+    <string name="notification_channel_alert_name">金价低价暴跌告警</string>
+</resources>
