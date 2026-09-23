@@ -39,9 +39,9 @@ class GoldItemAdapter(
                     binding.chartItemTrend.setChartData(emptyList(), item.unit)
                     onFetchChart(item) { fetched ->
                         chartCache[item.id] = fetched
-                        val pos = bindingAdapterPosition
-                        if (pos != RecyclerView.NO_POSITION) {
-                            notifyItemChanged(pos)
+                        val targetPos = currentList.indexOfFirst { it.id == item.id }
+                        if (targetPos != -1) {
+                            notifyItemChanged(targetPos)
                         }
                     }
                 }
@@ -52,15 +52,15 @@ class GoldItemAdapter(
 
             // 折叠/展开走势图表
             binding.btnToggleChart.setOnClickListener {
-                val pos = bindingAdapterPosition
-                if (pos == RecyclerView.NO_POSITION) return@setOnClickListener
+                val targetPos = currentList.indexOfFirst { it.id == item.id }
+                if (targetPos == -1) return@setOnClickListener
 
                 if (expandedItemIds.contains(item.id)) {
                     expandedItemIds.remove(item.id)
                 } else {
                     expandedItemIds.add(item.id)
                 }
-                notifyItemChanged(pos)
+                notifyItemChanged(targetPos)
             }
 
             // 设为盯盘标的
