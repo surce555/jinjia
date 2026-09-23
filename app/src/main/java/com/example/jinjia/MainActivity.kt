@@ -111,10 +111,14 @@ class MainActivity : AppCompatActivity() {
 
         // 2. 状态信息
         if (state.isRunning) {
-            binding.tvServiceStatus.text = "正在监控中 (5分钟轮询)"
-            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+            binding.tvServiceStatus.text = state.statusMessage
+            if (state.statusMessage.contains("失败") || state.statusMessage.contains("异常")) {
+                binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
+            } else {
+                binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
+            }
         } else {
-            binding.tvServiceStatus.text = "已停止"
+            binding.tvServiceStatus.text = state.statusMessage
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
         }
 

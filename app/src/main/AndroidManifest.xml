@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 基础网络权限 -->
+    <!-- 基础网络权限及网络状态检测权限（严格置于 manifest 根节点下） -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- 前台服务权限及 Android 14+ 数据同步类型声明 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -18,7 +19,8 @@
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_gold"
         android:supportsRtl="true"
-        android:theme="@style/Theme.Jinjia">
+        android:theme="@style/Theme.Jinjia"
+        android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"

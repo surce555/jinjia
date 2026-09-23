@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import kotlinx.coroutines.CoroutineScope
@@ -45,6 +46,8 @@ class GoldPriceService : Service() {
     )
 
     companion object {
+        private const val TAG = "GoldPriceService"
+
         const val ACTION_START = "com.example.jinjia.ACTION_START"
         const val ACTION_STOP = "com.example.jinjia.ACTION_STOP"
         const val EXTRA_THRESHOLD = "extra_threshold"
@@ -56,7 +59,12 @@ class GoldPriceService : Service() {
         const val NOTIFICATION_ALERT_ID = 2001
 
         private const val POLL_INTERVAL_MS = 5 * 60 * 1000L // 5 分钟
-        private const val API_URL = "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
+
+        // 数据源配置
+        private const val JD_API_URL = "https://api.jdjygold.com/gw2/generic/jrm/h5/m/stdLatestPrice?productSku=1961543816"
+        private const val SINA_API_URL = "https://hq.sinajs.cn/list=gds_au9999,gds_AUTD"
+
+        private const val BROWSER_UA = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
 
         private val _monitorState = MutableStateFlow(MonitorState())
         val monitorState = _monitorState.asStateFlow()
@@ -70,6 +78,7 @@ class GoldPriceService : Service() {
         OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(15, TimeUnit.SECONDS)
+            .followRedirects(true)
             .build()
     }
 
@@ -105,7 +114,7 @@ class GoldPriceService : Service() {
 
     private fun startMonitorService() {
         val initialNotification = buildMonitorNotification(
-            priceText = "正在获取实时金价...",
+            priceText = "正在拉取最新金价...",
             detailText = "监控阈值: ¥%.2f /克".format(targetThreshold)
         )
 
@@ -124,10 +133,10 @@ class GoldPriceService : Service() {
         _monitorState.value = _monitorState.value.copy(
             isRunning = true,
             targetThreshold = targetThreshold,
-            statusMessage = "正在监控中（每5分钟轮询）"
+            statusMessage = "正在初始化抓取数据..."
         )
 
-        // 启动 5 分钟轮询协程
+        // 启动轮询协程（立即异步触发首轮拉取，随后每 5 分钟执行一次）
         pollJob?.cancel()
         pollJob = serviceScope.launch {
             while (isActive) {
@@ -151,60 +160,172 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 抓取金价并根据告警状态机进行判定
+     * 核心业务：拉取金价并进行双接口主备容错与判定
      */
     private suspend fun fetchPriceAndEvaluate() {
+        var fetchedPrice: Double? = null
+        var fetchedTime: Long = System.currentTimeMillis()
+        var sourceName = "京东金融"
+        var lastError: String? = null
+
+        // 1. 首选尝试京东金融接口
         try {
-            val request = Request.Builder()
-                .url(API_URL)
-                .header("User-Agent", "Mozilla/5.0 (Android Mobile; 金价盯盘)")
+            val jdRequest = Request.Builder()
+                .url(JD_API_URL)
+                .header("User-Agent", BROWSER_UA)
+                .header("Accept", "application/json, text/plain, */*")
+                .header("Referer", "https://m.jdjygold.com/")
                 .get()
                 .build()
 
             val response = withContext(Dispatchers.IO) {
-                okHttpClient.newCall(request).execute()
+                okHttpClient.newCall(jdRequest).execute()
             }
 
-            val bodyString = response.body?.string()
-            if (response.isSuccessful && !bodyString.isNullOrEmpty()) {
-                val jsonObject = JSONObject(bodyString)
-                val resultData = jsonObject.optJSONObject("resultData")
-                val datas = resultData?.optJSONObject("datas")
+            if (response.isSuccessful) {
+                val body = response.body?.string()
+                if (!body.isNullOrEmpty()) {
+                    val parsed = parseJdResponse(body)
+                    if (parsed != null) {
+                        fetchedPrice = parsed.first
+                        fetchedTime = parsed.second
+                        sourceName = "京东金融"
+                        Log.i(TAG, "Successfully fetched price from JD: $fetchedPrice")
+                    } else {
+                        lastError = "京东数据字段解析为空"
+                    }
+                } else {
+                    lastError = "京东返回空内容"
+                }
+            } else {
+                lastError = "京东返回 HTTP ${response.code}"
+            }
+        } catch (e: Exception) {
+            val err = formatException(e)
+            Log.e(TAG, "JD API failed: $err", e)
+            lastError = "京东失败($err)"
+        }
 
-                if (datas != null) {
-                    val priceStr = datas.optString("price")
-                    val timeVal = datas.optLong("time", System.currentTimeMillis())
-                    val price = priceStr.toDoubleOrNull()
+        // 2. 若京东接口失败，自动切换新浪黄金现货备用接口
+        if (fetchedPrice == null) {
+            try {
+                Log.w(TAG, "Switching to fallback Sina gold API...")
+                val sinaRequest = Request.Builder()
+                    .url(SINA_API_URL)
+                    .header("User-Agent", BROWSER_UA)
+                    .header("Accept", "*/*")
+                    .header("Referer", "https://finance.sina.com.cn")
+                    .get()
+                    .build()
 
-                    if (price != null) {
-                        handleNewPrice(price, timeVal)
-                        return
+                val response = withContext(Dispatchers.IO) {
+                    okHttpClient.newCall(sinaRequest).execute()
+                }
+
+                if (response.isSuccessful) {
+                    val body = response.body?.string()
+                    if (!body.isNullOrEmpty()) {
+                        val parsed = parseSinaResponse(body)
+                        if (parsed != null) {
+                            fetchedPrice = parsed.first
+                            fetchedTime = parsed.second
+                            sourceName = "新浪黄金现货(备用)"
+                            lastError = null // 备用接口拉取成功，清除错误提示
+                            Log.i(TAG, "Successfully fetched price from Sina: $fetchedPrice")
+                        } else {
+                            lastError = "${lastError ?: ""}; 新浪行情解析为空"
+                        }
+                    } else {
+                        lastError = "${lastError ?: ""}; 新浪返回空内容"
+                    }
+                } else {
+                    lastError = "${lastError ?: ""}; 新浪返回 HTTP ${response.code}"
+                }
+            } catch (e: Exception) {
+                val err = formatException(e)
+                Log.e(TAG, "Sina API failed: $err", e)
+                lastError = "${lastError ?: ""}; 新浪失败($err)"
+            }
+        }
+
+        // 3. 结果调度与 UI / 通知刷新
+        if (fetchedPrice != null) {
+            handleNewPrice(fetchedPrice, fetchedTime, sourceName)
+        } else {
+            val finalErrMsg = lastError ?: "网络拉取金价失败"
+            Log.e(TAG, "All sources failed: $finalErrMsg")
+            val timeFormatted = formatTimestamp(System.currentTimeMillis())
+            _monitorState.value = _monitorState.value.copy(
+                statusMessage = "拉取异常: $finalErrMsg"
+            )
+            updatePersistentNotification(
+                priceText = "金价拉取失败",
+                detailText = "$finalErrMsg (等待重试 $timeFormatted)"
+            )
+        }
+    }
+
+    private fun parseJdResponse(body: String): Pair<Double, Long>? {
+        return try {
+            val jsonObject = JSONObject(body)
+            val resultData = jsonObject.optJSONObject("resultData")
+            val datas = resultData?.optJSONObject("datas") ?: return null
+            val priceStr = datas.optString("price")
+            val price = priceStr.toDoubleOrNull() ?: return null
+            val time = datas.optLong("time", System.currentTimeMillis())
+            Pair(price, time)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse JD JSON", e)
+            null
+        }
+    }
+
+    private fun parseSinaResponse(body: String): Pair<Double, Long>? {
+        return try {
+            // 解析格式 var hq_str_xxx="...";
+            val pattern = Regex("\"([^\"]+)\"")
+            val matches = pattern.findAll(body)
+            for (match in matches) {
+                val content = match.groupValues[1]
+                if (content.isBlank()) continue
+                val parts = content.split(",")
+                if (parts.isNotEmpty()) {
+                    val price = parts[0].trim().toDoubleOrNull()
+                    if (price != null && price > 0) {
+                        var time = System.currentTimeMillis()
+                        try {
+                            if (parts.size >= 13) {
+                                val dateStr = parts[12].trim()
+                                val timeStr = parts[6].trim()
+                                val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+                                time = sdf.parse("$dateStr $timeStr")?.time ?: time
+                            }
+                        } catch (_: Exception) {}
+                        return Pair(price, time)
                     }
                 }
             }
-
-            // 数据解析异常处理
-            updatePersistentNotification(
-                priceText = "最新金价解析失败",
-                detailText = "监控阈值: ¥%.2f /克".format(targetThreshold)
-            )
+            null
         } catch (e: Exception) {
-            e.printStackTrace()
-            val timeFormatted = formatTimestamp(System.currentTimeMillis())
-            _monitorState.value = _monitorState.value.copy(
-                statusMessage = "请求异常: ${e.localizedMessage ?: "网络错误"}"
-            )
-            updatePersistentNotification(
-                priceText = "网络拉取金价失败",
-                detailText = "重试等待中 ($timeFormatted)"
-            )
+            Log.e(TAG, "Failed to parse Sina quote", e)
+            null
+        }
+    }
+
+    private fun formatException(e: Exception): String {
+        return when {
+            e is java.net.SocketTimeoutException -> "网络超时"
+            e is java.net.UnknownHostException -> "域名解析失败(无网络/DNS错误)"
+            e is java.net.ConnectException -> "连接被拒绝"
+            e is SecurityException -> "系统权限拦截(SecurityException)"
+            else -> e.localizedMessage ?: e.javaClass.simpleName
         }
     }
 
     /**
      * 核心业务：边缘触发告警逻辑判定
      */
-    private fun handleNewPrice(currentPrice: Double, timestamp: Long) {
+    private fun handleNewPrice(currentPrice: Double, timestamp: Long, sourceName: String) {
         // 1. 边缘触发告警状态机
         if (targetThreshold > 0) {
             if (currentPrice < targetThreshold) {
@@ -226,14 +347,14 @@ class GoldPriceService : Service() {
             currentPrice = currentPrice,
             targetThreshold = targetThreshold,
             updateTime = timestamp,
-            statusMessage = "正常监控中（每5分钟更新）"
+            statusMessage = "监控中（数据源: $sourceName）"
         )
 
         // 3. 刷新常驻前台通知
         val timeFormatted = formatTimestamp(timestamp)
         updatePersistentNotification(
             priceText = "实时金价: ¥%.2f /克".format(currentPrice),
-            detailText = "目标: <¥%.2f | 更新: %s".format(targetThreshold, timeFormatted)
+            detailText = "目标: <¥%.2f | 来源: %s (%s)".format(targetThreshold, sourceName, timeFormatted)
         )
     }
 
