@@ -24,15 +24,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Setup Gradle Wrapper
+      - name: Generate Gradle Wrapper
         run: |
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "Generating Gradle wrapper..."
-            gradle wrapper --gradle-version 8.7
-          fi
+          gradle wrapper
           chmod +x gradlew
 
       - name: Build Debug APK
@@ -48,4 +42,3 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: app/build/outputs/apk/debug/*.apk
-          token: ${{ secrets.GITHUB_TOKEN }}
