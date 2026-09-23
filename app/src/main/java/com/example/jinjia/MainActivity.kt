@@ -37,7 +37,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var goldItemAdapter: GoldItemAdapter
 
     private var hasPromptedBatteryOptimization = false
-    private var allItemsList = listOf<GoldItem>()
+
+    // 统一标的数据列表，初始必须使用 DEFAULT_TARGETS，确保任何时候绝不为空白
+    private val allTargetsList = mutableListOf<GoldItem>()
     private var selectedTargetItem: GoldItem? = null
 
     // 刷新频率选项映射
@@ -72,35 +74,55 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        try {
+            binding = ActivityMainBinding.inflate(layoutInflater)
+            setContentView(binding.root)
 
-        initRecyclerView()
-        initIntervalSpinner()
-        initTabs()
-        initViews()
-        observeServiceState()
+            // 1. 初始化预置标的数据（杜绝 Spinner 空白）
+            allTargetsList.clear()
+            allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
 
-        // 核心改造：冷启动自动异步拉取全网最新数据并刷新界面与下拉框
-        fetchGoldDataImmediately()
+            initRecyclerView()
+            initIntervalSpinner()
+            initTabs()
+            initViews()
+
+            // 预填充 Spinner，默认选中首项
+            updateTargetSpinner()
+            selectedTargetItem = allTargetsList.firstOrNull()
+            selectedTargetItem?.let {
+                binding.tvCurrentTargetTitle.text = it.displayName
+                binding.tvTargetPrice.text = "¥ %.2f /克".format(it.price)
+            }
+
+            observeServiceState()
+
+            // 2. 自动异步拉取全网最新数据
+            fetchGoldDataImmediately()
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "Error in onCreate: ${t.message}", t)
+            Toast.makeText(this, "启动初始化提示: ${t.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        // 1. 读取本地持久化缓存直出界面
-        val saved = GoldPriceService.getSavedState(this)
-        updateUi(saved)
+        try {
+            // 读取本地持久化缓存直出界面
+            val saved = GoldPriceService.getSavedState(this)
+            updateUi(saved)
 
-        if (saved.allItems.isNotEmpty()) {
-            allItemsList = saved.allItems
-            updateTargetSpinner()
-            filterAndDisplayList()
-        } else if (allItemsList.isEmpty()) {
-            fetchGoldDataImmediately()
+            if (saved.allItems.isNotEmpty()) {
+                allTargetsList.clear()
+                allTargetsList.addAll(saved.allItems)
+                updateTargetSpinner()
+                filterAndDisplayList()
+            }
+
+            checkBatteryOptimization()
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "Error in onResume: ${t.message}", t)
         }
-
-        // 2. 检查电池优化白名单
-        checkBatteryOptimization()
     }
 
     /**
@@ -125,13 +147,22 @@ class MainActivity : AppCompatActivity() {
                     .apply()
 
                 withContext(Dispatchers.Main) {
-                    allItemsList = items
-                    updateTargetSpinner()
-                    filterAndDisplayList()
+                    if (items.isNotEmpty()) {
+                        allTargetsList.clear()
+                        allTargetsList.addAll(items)
+                        updateTargetSpinner()
+                        filterAndDisplayList()
 
-                    // 默认选第一项
-                    if (selectedTargetItem == null && items.isNotEmpty()) {
-                        setTargetItem(items.first())
+                        // 若未手动选择过标的，则默认选第一项
+                        if (selectedTargetItem == null) {
+                            setTargetItem(items.first())
+                        } else {
+                            // 保持当前选中标的的最新价格更新
+                            val current = items.find { it.id == selectedTargetItem?.id }
+                            if (current != null) {
+                                setTargetItem(current)
+                            }
+                        }
                     }
 
                     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
@@ -148,10 +179,10 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     val running = GoldPriceService.monitorState.value.isRunning
                     if (!running) {
-                        binding.tvServiceStatus.text = "拉取异常: ${t.message}"
+                        binding.tvServiceStatus.text = "拉取提示: ${t.message}"
                         binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.status_red))
                     }
-                    Toast.makeText(this@MainActivity, "拉取失败: ${t.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this@MainActivity, "行情拉取提示: ${t.message}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -159,7 +190,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initRecyclerView() {
         goldItemAdapter = GoldItemAdapter { item ->
-            // 点击列表项目设为盯盘标的
+            // 点击列表卡片直接设为盯盘标的并联动 Spinner 与顶部卡片
             setTargetItem(item)
             Toast.makeText(this, "已将【${item.displayName}】选为盯盘标的", Toast.LENGTH_SHORT).show()
         }
@@ -177,7 +208,6 @@ class MainActivity : AppCompatActivity() {
         }
         binding.spInterval.adapter = adapter
 
-        // 默认选中 5 分钟
         val saved = GoldPriceService.getSavedState(this)
         val defaultIdx = intervalOptions.indexOfFirst { it.second == saved.intervalMinutes }.let {
             if (it >= 0) it else 3
@@ -217,51 +247,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 设置当前选中的标的，并立即联动刷新顶部卡片
+     */
     private fun setTargetItem(item: GoldItem) {
         selectedTargetItem = item
         binding.tvCurrentTargetTitle.text = item.displayName
         binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
 
-        // 同步 Spinner 选中项
-        val idx = allItemsList.indexOfFirst { it.id == item.id }
-        if (idx >= 0 && binding.spTarget.adapter != null) {
+        val idx = allTargetsList.indexOfFirst { it.id == item.id }
+        if (idx >= 0 && binding.spTarget.adapter != null && binding.spTarget.selectedItemPosition != idx) {
             binding.spTarget.setSelection(idx)
         }
 
-        // 若当前输入框为空，推荐预填当前价少 5 元作为默认参考阈值
+        // 若输入框为空，推荐预填当前价少 5 元作为参考
         if (binding.etThreshold.text.isNullOrBlank()) {
             val suggested = (item.price - 5.0).coerceAtLeast(1.0)
             binding.etThreshold.setText("%.2f".format(suggested))
         }
     }
 
+    /**
+     * 刷新并更新下拉标的列表，选择联动顶部价格
+     */
     private fun updateTargetSpinner() {
-        if (allItemsList.isEmpty()) return
+        if (allTargetsList.isEmpty()) return
 
-        val titles = allItemsList.map { "【${getCategoryName(it.category)}】${it.displayName} (¥%.2f)".format(it.price) }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, titles).apply {
+        val displayLabels = allTargetsList.map { "${it.displayName} (¥%.2f/克)".format(it.price) }
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, displayLabels).apply {
             setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         }
         binding.spTarget.adapter = adapter
 
-        // 默认恢复已选或第 1 项
+        // 默认恢复之前已选或首项
         val saved = GoldPriceService.getSavedState(this)
-        val selectedIdx = allItemsList.indexOfFirst { it.id == (selectedTargetItem?.id ?: saved.targetId) }.let {
+        val selectedIdx = allTargetsList.indexOfFirst { it.id == (selectedTargetItem?.id ?: saved.targetId) }.let {
             if (it >= 0) it else 0
         }
         binding.spTarget.setSelection(selectedIdx)
-        selectedTargetItem = allItemsList.getOrNull(selectedIdx)
+        selectedTargetItem = allTargetsList.getOrNull(selectedIdx)
 
         binding.spTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position in allItemsList.indices) {
-                    val item = allItemsList[position]
+                if (position in allTargetsList.indices) {
+                    val item = allTargetsList[position]
                     selectedTargetItem = item
+                    // 标的选择立即联动：顶部卡片即时刷新该标的名称与价格
                     binding.tvCurrentTargetTitle.text = item.displayName
-                    val running = GoldPriceService.monitorState.value.isRunning
-                    if (!running) {
-                        binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
-                    }
+                    binding.tvTargetPrice.text = "¥ %.2f /克".format(item.price)
                 }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -282,7 +315,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val filtered = allItemsList.filter { it.category == catTag }
+        val filtered = allTargetsList.filter { it.category == catTag }
         goldItemAdapter.submitList(filtered)
 
         if (filtered.isEmpty()) {
@@ -343,26 +376,41 @@ class MainActivity : AppCompatActivity() {
         binding.tilThreshold.error = null
 
         val interval = intervalOptions.getOrNull(binding.spInterval.selectedItemPosition)?.second ?: 5.0
-        val target = selectedTargetItem ?: allItemsList.firstOrNull()
+        val target = selectedTargetItem ?: allTargetsList.firstOrNull()
 
-        val intent = Intent(this, GoldPriceService::class.java).apply {
-            action = GoldPriceService.ACTION_START
-            putExtra(GoldPriceService.EXTRA_THRESHOLD, threshold)
-            putExtra(GoldPriceService.EXTRA_INTERVAL_MINUTES, interval)
-            putExtra(GoldPriceService.EXTRA_TARGET_ID, target?.id ?: "")
-            putExtra(GoldPriceService.EXTRA_TARGET_NAME, target?.displayName ?: "今日金价")
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = GoldPriceService.ACTION_START
+                putExtra(GoldPriceService.EXTRA_THRESHOLD, threshold)
+                putExtra(GoldPriceService.EXTRA_INTERVAL_MINUTES, interval)
+                putExtra(GoldPriceService.EXTRA_TARGET_ID, target?.id ?: "")
+                putExtra(GoldPriceService.EXTRA_TARGET_NAME, target?.displayName ?: "[大盘] 今日金价")
+            }
+
+            ContextCompat.startForegroundService(this, intent)
+            Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】实时监控", Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "startMonitoring failed: ${t.message}", t)
+            // 全量防崩溃：启动异常时自动重置运行状态，绝不导致死循环闪退
+            getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(GoldPriceService.KEY_IS_RUNNING, false)
+                .apply()
+            updateUi(GoldPriceService.getSavedState(this))
+            Toast.makeText(this, "启动监控异常: ${t.message}", Toast.LENGTH_LONG).show()
         }
-
-        ContextCompat.startForegroundService(this, intent)
-        Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】实时监控", Toast.LENGTH_SHORT).show()
     }
 
     private fun stopMonitoring() {
-        val intent = Intent(this, GoldPriceService::class.java).apply {
-            action = GoldPriceService.ACTION_STOP
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = GoldPriceService.ACTION_STOP
+            }
+            startService(intent)
+            Toast.makeText(this, "监控服务已停止", Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "stopMonitoring failed: ${t.message}", t)
         }
-        startService(intent)
-        Toast.makeText(this, "监控服务已停止", Toast.LENGTH_SHORT).show()
     }
 
     private fun observeServiceState() {
@@ -370,8 +418,9 @@ class MainActivity : AppCompatActivity() {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 GoldPriceService.monitorState.collect { state ->
                     updateUi(state)
-                    if (state.allItems.isNotEmpty() && state.allItems != allItemsList) {
-                        allItemsList = state.allItems
+                    if (state.allItems.isNotEmpty() && state.allItems != allTargetsList) {
+                        allTargetsList.clear()
+                        allTargetsList.addAll(state.allItems)
                         updateTargetSpinner()
                         filterAndDisplayList()
                     }
@@ -393,7 +442,6 @@ class MainActivity : AppCompatActivity() {
             binding.tvServiceStatus.text = "监控中 (%.1fm 轮询)".format(state.intervalMinutes)
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
         } else {
-            // 未运行时若有状态文本则显示（如已更新最新行情或报错）
             if (binding.tvServiceStatus.text == "未运行" || binding.tvServiceStatus.text == "已停止") {
                 binding.tvServiceStatus.text = state.statusMessage
                 binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_red))
@@ -404,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         if (state.targetTitle.isNotBlank()) {
             binding.tvCurrentTargetTitle.text = state.targetTitle
         }
-        if (state.targetPrice != null) {
+        if (state.targetPrice != null && state.targetPrice > 0) {
             binding.tvTargetPrice.text = "¥ %.2f /克".format(state.targetPrice)
         }
 
@@ -455,16 +503,6 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        }
-    }
-
-    private fun getCategoryName(cat: String): String {
-        return when (cat) {
-            GoldDataParser.CAT_BANKS -> "银行"
-            GoldDataParser.CAT_STORES -> "金店"
-            GoldDataParser.CAT_METALS -> "大盘"
-            GoldDataParser.CAT_RECYCLE -> "回收"
-            else -> "行情"
         }
     }
 }

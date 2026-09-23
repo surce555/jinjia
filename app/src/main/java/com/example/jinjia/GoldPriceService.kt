@@ -21,8 +21,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -30,13 +32,14 @@ import java.util.Locale
 
 /**
  * 金价后台轮询与多品类精准监控服务
+ * 全量防崩溃兜底，使用安全 AlarmManager.setAndAllowWhileIdle 与协程循环双重保活
  */
 class GoldPriceService : Service() {
 
     data class MonitorState(
         val isRunning: Boolean = false,
         val targetId: String = "",
-        val targetTitle: String = "未选择标的",
+        val targetTitle: String = "[大盘] 今日金价",
         val targetPrice: Double? = null,
         val targetThreshold: Double? = null,
         val intervalMinutes: Double = 5.0,
@@ -82,30 +85,35 @@ class GoldPriceService : Service() {
          * 供外部（如 MainActivity.onResume）读取本地缓存状态
          */
         fun getSavedState(context: Context): MonitorState {
-            val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val isRunning = sp.getBoolean(KEY_IS_RUNNING, false)
-            val targetId = sp.getString(KEY_TARGET_ID, "") ?: ""
-            val targetTitle = sp.getString(KEY_TARGET_TITLE, "今日金价") ?: "今日金价"
-            val priceStr = sp.getString(KEY_TARGET_PRICE, null)
-            val targetPrice = priceStr?.toDoubleOrNull()
-            val threshold = sp.getFloat(KEY_TARGET_THRESHOLD, 0f).toDouble()
-            val intervalMinutes = sp.getFloat(KEY_INTERVAL_MINUTES, 5.0f).toDouble()
-            val updateTime = sp.getLong(KEY_UPDATE_TIME, 0L)
-            val statusMsg = sp.getString(KEY_STATUS_MESSAGE, if (isRunning) "正在监控中" else "未运行") ?: "未运行"
-            val json = sp.getString(KEY_ALL_ITEMS_JSON, null) ?: ""
-            val allItems = GoldDataParser.parseJson(json)
+            return try {
+                val sp = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val isRunning = sp.getBoolean(KEY_IS_RUNNING, false)
+                val targetId = sp.getString(KEY_TARGET_ID, "metals_今日金价") ?: "metals_今日金价"
+                val targetTitle = sp.getString(KEY_TARGET_TITLE, "[大盘] 今日金价") ?: "[大盘] 今日金价"
+                val priceStr = sp.getString(KEY_TARGET_PRICE, null)
+                val targetPrice = priceStr?.toDoubleOrNull()
+                val threshold = sp.getFloat(KEY_TARGET_THRESHOLD, 0f).toDouble()
+                val intervalMinutes = sp.getFloat(KEY_INTERVAL_MINUTES, 5.0f).toDouble()
+                val updateTime = sp.getLong(KEY_UPDATE_TIME, 0L)
+                val statusMsg = sp.getString(KEY_STATUS_MESSAGE, if (isRunning) "正在监控中" else "未运行") ?: "未运行"
+                val json = sp.getString(KEY_ALL_ITEMS_JSON, null) ?: ""
+                val allItems = if (json.isNotBlank()) GoldDataParser.parseJson(json) else GoldDataParser.DEFAULT_TARGETS
 
-            return MonitorState(
-                isRunning = isRunning,
-                targetId = targetId,
-                targetTitle = targetTitle,
-                targetPrice = targetPrice,
-                targetThreshold = if (threshold > 0) threshold else null,
-                intervalMinutes = intervalMinutes.coerceAtLeast(0.5),
-                updateTime = if (updateTime > 0) updateTime else null,
-                statusMessage = statusMsg,
-                allItems = allItems
-            )
+                MonitorState(
+                    isRunning = isRunning,
+                    targetId = targetId,
+                    targetTitle = targetTitle,
+                    targetPrice = targetPrice,
+                    targetThreshold = if (threshold > 0) threshold else null,
+                    intervalMinutes = intervalMinutes.coerceAtLeast(0.5),
+                    updateTime = if (updateTime > 0) updateTime else null,
+                    statusMessage = statusMsg,
+                    allItems = allItems
+                )
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to getSavedState: ${t.message}", t)
+                MonitorState()
+            }
         }
     }
 
@@ -126,73 +134,96 @@ class GoldPriceService : Service() {
     }
 
     // 监控与告警状态机参数
-    private var targetId: String = ""
-    private var targetTitle: String = "今日金价"
+    private var targetId: String = "metals_今日金价"
+    private var targetTitle: String = "[大盘] 今日金价"
     private var targetThreshold: Double = 0.0
     private var intervalMinutes: Double = 5.0
     private var hasAlerted: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannels()
-
-        // 还原本地持久化参数
-        val saved = getSavedState(this)
-        targetId = saved.targetId
-        targetTitle = saved.targetTitle
-        if (saved.targetThreshold != null) targetThreshold = saved.targetThreshold
-        intervalMinutes = saved.intervalMinutes
-        _monitorState.value = saved
+        try {
+            createNotificationChannels()
+            val saved = getSavedState(this)
+            targetId = saved.targetId
+            targetTitle = saved.targetTitle
+            if (saved.targetThreshold != null) targetThreshold = saved.targetThreshold
+            intervalMinutes = saved.intervalMinutes
+            _monitorState.value = saved
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error in onCreate: ${t.message}", t)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_START -> {
-                val newTargetId = intent.getStringExtra(EXTRA_TARGET_ID) ?: ""
-                val newTargetName = intent.getStringExtra(EXTRA_TARGET_NAME) ?: ""
-                val threshold = intent.getDoubleExtra(EXTRA_THRESHOLD, 0.0)
-                val interval = intent.getDoubleExtra(EXTRA_INTERVAL_MINUTES, 5.0)
+        // 第一行必须立即调用 startForeground 满足 Android 14 规范，杜绝闪退
+        try {
+            promoteToForeground()
+        } catch (t: Throwable) {
+            Log.e(TAG, "startForeground failed: ${t.message}", t)
+        }
 
-                if (newTargetId.isNotBlank()) targetId = newTargetId
-                if (newTargetName.isNotBlank()) targetTitle = newTargetName
-                if (threshold > 0) {
-                    targetThreshold = threshold
-                    hasAlerted = false // 重新设置阈值时复位告警状态机
-                }
-                intervalMinutes = interval.coerceAtLeast(0.5)
+        try {
+            when (intent?.action) {
+                ACTION_START -> {
+                    val newTargetId = intent.getStringExtra(EXTRA_TARGET_ID) ?: ""
+                    val newTargetName = intent.getStringExtra(EXTRA_TARGET_NAME) ?: ""
+                    val threshold = intent.getDoubleExtra(EXTRA_THRESHOLD, 0.0)
+                    val interval = intent.getDoubleExtra(EXTRA_INTERVAL_MINUTES, 5.0)
 
-                startMonitorService()
-            }
-            ACTION_POLL -> {
-                if (_monitorState.value.isRunning) {
-                    Log.i(TAG, "Alarm triggered: executing scheduled poll in Doze mode")
-                    triggerPoll()
+                    if (newTargetId.isNotBlank()) targetId = newTargetId
+                    if (newTargetName.isNotBlank()) targetTitle = newTargetName
+                    if (threshold > 0) {
+                        targetThreshold = threshold
+                        hasAlerted = false // 重新设置阈值时复位告警状态机
+                    }
+                    intervalMinutes = interval.coerceAtLeast(0.5)
+
+                    startMonitorService()
+                }
+                ACTION_POLL -> {
+                    if (_monitorState.value.isRunning) {
+                        Log.i(TAG, "Safe alarm triggered in background")
+                        serviceScope.launch {
+                            try {
+                                fetchPriceAndEvaluate()
+                            } catch (t: Throwable) {
+                                Log.e(TAG, "ACTION_POLL error: ${t.message}", t)
+                            }
+                        }
+                    }
+                }
+                ACTION_STOP -> {
+                    stopMonitorService()
                 }
             }
-            ACTION_STOP -> {
-                stopMonitorService()
-            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Exception in onStartCommand: ${t.message}", t)
+            // 异常时重置 SharedPreferences 中的运行状态，彻底打破死循环闪退
+            resetRunningStateOnFailure()
         }
         return START_STICKY
     }
 
-    private fun startMonitorService() {
-        val initialNotification = buildMonitorNotification(
-            priceText = "【$targetTitle】正在拉取最新金价...",
-            detailText = "监控阈值: ¥%.2f /克 | 间隔: %.1f分钟".format(targetThreshold, intervalMinutes)
+    private fun promoteToForeground() {
+        val notification = buildMonitorNotification(
+            priceText = "【$targetTitle】正在监控...",
+            detailText = "阈值: ¥%.2f | 间隔: %.1f分钟".format(targetThreshold, intervalMinutes)
         )
-
-        // 启动前台服务（适配 Android 14+ dataSync 类型）
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceCompat.startForeground(
                 this,
                 NOTIFICATION_MONITOR_ID,
-                initialNotification,
+                notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             )
         } else {
-            startForeground(NOTIFICATION_MONITOR_ID, initialNotification)
+            startForeground(NOTIFICATION_MONITOR_ID, notification)
         }
+    }
+
+    private fun startMonitorService() {
+        promoteToForeground()
 
         val updatedState = _monitorState.value.copy(
             isRunning = true,
@@ -200,13 +231,25 @@ class GoldPriceService : Service() {
             targetTitle = targetTitle,
             targetThreshold = targetThreshold,
             intervalMinutes = intervalMinutes,
-            statusMessage = "正在初始化全网金价..."
+            statusMessage = "正在监控中"
         )
         _monitorState.value = updatedState
         saveStateToPrefs(updatedState, null)
 
-        // 即刻触发首轮异步拉取，后续由 AlarmManager 精准续期
-        triggerPoll()
+        // 启动安全协程循环轮询，辅以安全闹钟唤醒
+        pollJob?.cancel()
+        pollJob = serviceScope.launch {
+            while (isActive) {
+                try {
+                    fetchPriceAndEvaluate()
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Coroutine loop error: ${t.message}", t)
+                }
+                scheduleSafeAlarm()
+                val delayMs = (intervalMinutes * 60 * 1000L).toLong().coerceAtLeast(30_000L)
+                delay(delayMs)
+            }
+        }
     }
 
     private fun stopMonitorService() {
@@ -224,67 +267,45 @@ class GoldPriceService : Service() {
         _monitorState.value = stoppedState
         saveStateToPrefs(stoppedState, null)
 
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        try {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        } catch (_: Throwable) {}
         stopSelf()
     }
 
-    private fun triggerPoll() {
-        pollJob?.cancel()
-        pollJob = serviceScope.launch {
-            try {
-                fetchPriceAndEvaluate()
-            } catch (t: Throwable) {
-                Log.e(TAG, "Exception during poll execution: ${t.message}", t)
-            } finally {
-                if (_monitorState.value.isRunning) {
-                    scheduleNextAlarm()
-                }
-            }
-        }
-    }
-
     /**
-     * 动态设置下一次 AlarmManager 唤醒闹钟（根据 intervalMinutes 计算，最小 30 秒）
+     * 使用无需特殊权限的安全闹钟 setAndAllowWhileIdle，杜绝 SecurityException 闪退
      */
-    private fun scheduleNextAlarm() {
+    private fun scheduleSafeAlarm() {
         try {
             val intervalMs = (intervalMinutes * 60 * 1000L).toLong().coerceAtLeast(30_000L)
             val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMs
             val pendingIntent = getPollPendingIntent()
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()) {
-                    alarmManager.setExactAndAllowWhileIdle(
-                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                } else {
-                    alarmManager.setAndAllowWhileIdle(
-                        AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                        triggerAtMillis,
-                        pendingIntent
-                    )
-                }
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
             } else {
-                alarmManager.setExact(
+                alarmManager.set(
                     AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
             }
-            Log.i(TAG, "Scheduled next Alarm in ${intervalMs / 1000}s")
+            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s")
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to schedule AlarmManager: ${t.message}", t)
+            Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
         }
     }
 
     private fun cancelAlarm() {
         try {
             alarmManager.cancel(getPollPendingIntent())
-            Log.i(TAG, "Alarm cancelled")
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to cancel Alarm: ${t.message}", t)
+            Log.w(TAG, "cancelAlarm error: ${t.message}")
         }
     }
 
@@ -305,58 +326,55 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 核心网络拉取与指定标的预警比对（复用 GoldRepository）
+     * 核心网络拉取与指定标的预警比对
      */
     private suspend fun fetchPriceAndEvaluate() {
-        val wakeLock = powerManager.newWakeLock(
-            PowerManager.PARTIAL_WAKE_LOCK,
-            "Jinjia:NetworkWakeLock"
-        )
-        try {
-            wakeLock.acquire(30_000L) // 30 秒超时保护
+        val wakeLock = try {
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "Jinjia:NetworkWakeLock"
+            ).apply { acquire(30_000L) }
+        } catch (_: Throwable) {
+            null
+        }
 
+        try {
             val (allItems, jsonString) = GoldRepository.fetchGoldData()
             if (allItems.isNotEmpty()) {
                 handleParsedData(allItems, jsonString)
-            } else {
-                handleFetchError("解析后无有效行情条目")
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Fetch failed: ${t.message}", t)
             handleFetchError(t.message ?: t.javaClass.simpleName)
         } finally {
             try {
-                if (wakeLock.isHeld) wakeLock.release()
-            } catch (t: Throwable) {
-                Log.w(TAG, "Error releasing wake lock: ${t.message}")
-            }
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            } catch (_: Throwable) {}
         }
     }
 
     private fun handleParsedData(allItems: List<GoldItem>, rawJson: String) {
         val timestamp = System.currentTimeMillis()
 
-        // 匹配用户指定的监控标的，若未指定则默认选第一个
-        val targetItem = if (targetId.isNotBlank()) {
-            allItems.find { it.id == targetId } ?: allItems.find { it.title.contains(targetTitle) } ?: allItems.first()
-        } else {
-            allItems.first()
-        }
+        // 精准匹配当前监控的目标标的
+        val targetItem = allItems.find { it.id == targetId }
+            ?: allItems.find { it.title == targetTitle }
+            ?: allItems.first()
 
         val currentPrice = targetItem.price
         val currentTitle = targetItem.displayName
         targetId = targetItem.id
         targetTitle = currentTitle
 
-        // 1. 边缘触发告警状态机
-        if (targetThreshold > 0) {
+        // 1. 边缘触发告警状态机（低于阈值悬浮提醒 1 次）
+        if (targetThreshold > 0 && currentPrice > 0) {
             if (currentPrice < targetThreshold) {
                 if (!hasAlerted) {
                     sendAlertNotification(currentTitle, currentPrice, targetThreshold)
                     hasAlerted = true
                 }
             } else {
-                hasAlerted = false
+                hasAlerted = false // 价格回升，自动复位
             }
         }
 
@@ -369,7 +387,7 @@ class GoldPriceService : Service() {
             targetThreshold = targetThreshold,
             intervalMinutes = intervalMinutes,
             updateTime = timestamp,
-            statusMessage = "监控中（已收录 ${allItems.size} 项行情）",
+            statusMessage = "正在监控",
             allItems = allItems
         )
         _monitorState.value = newState
@@ -392,8 +410,8 @@ class GoldPriceService : Service() {
         saveStateToPrefs(errState, null)
 
         updatePersistentNotification(
-            priceText = "【$targetTitle】金价拉取失败",
-            detailText = "$errorMsg (重试等待中 $timeFormatted)"
+            priceText = "【$targetTitle】更新等待中",
+            detailText = "$errorMsg ($timeFormatted)"
         )
     }
 
@@ -415,8 +433,16 @@ class GoldPriceService : Service() {
             }
             editor.apply()
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to save state to SharedPreferences: ${t.message}", t)
+            Log.e(TAG, "saveStateToPrefs error: ${t.message}", t)
         }
+    }
+
+    private fun resetRunningStateOnFailure() {
+        try {
+            val sp = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            sp.edit().putBoolean(KEY_IS_RUNNING, false).apply()
+            _monitorState.value = _monitorState.value.copy(isRunning = false, statusMessage = "已重置未运行")
+        } catch (_: Throwable) {}
     }
 
     @Suppress("DEPRECATION")
@@ -428,7 +454,7 @@ class GoldPriceService : Service() {
             )
             screenWakeLock.acquire(5_000L)
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to wake up screen: ${t.message}", t)
+            Log.e(TAG, "wakeUpScreen error: ${t.message}", t)
         }
     }
 
@@ -439,8 +465,8 @@ class GoldPriceService : Service() {
 
         val alertNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
             .setSmallIcon(R.drawable.ic_gold)
-            .setContentTitle("【低价告警】$title 跌破阈值！")
-            .setContentText("【$title】当前实时金价 ¥%.2f /克，已跌破监控阈值 ¥%.2f /克！".format(price, threshold))
+            .setContentTitle("【$title】跌破预警阈值！")
+            .setContentText("【$title】跌破阈值，当前价格为 %.2f 元/克（监控阈值: %.2f 元/克）".format(price, threshold))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -526,13 +552,15 @@ class GoldPriceService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        cancelAlarm()
-        serviceScope.cancel()
-        val stoppedState = _monitorState.value.copy(
-            isRunning = false,
-            statusMessage = "服务已终止"
-        )
-        _monitorState.value = stoppedState
-        saveStateToPrefs(stoppedState, null)
+        try {
+            cancelAlarm()
+            serviceScope.cancel()
+            val stoppedState = _monitorState.value.copy(
+                isRunning = false,
+                statusMessage = "服务已终止"
+            )
+            _monitorState.value = stoppedState
+            saveStateToPrefs(stoppedState, null)
+        } catch (_: Throwable) {}
     }
 }
