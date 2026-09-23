@@ -1,12 +1,17 @@
 package com.example.jinjia
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -21,6 +26,7 @@ import java.util.Locale
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
+    private var hasPromptedBatteryOptimization = false
 
     // 申请 Android 13+ (API 33) 通知权限启动器
     private val notificationPermissionLauncher = registerForActivityResult(
@@ -40,6 +46,21 @@ class MainActivity : AppCompatActivity() {
 
         initViews()
         observeServiceState()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 1. 第一时间读取 SharedPreferences 中的最新价格、状态与更新时间刷新界面
+        val savedState = GoldPriceService.getSavedState(this)
+        updateUi(savedState)
+
+        // 若输入框未填入数值且本地已存有阈值，则自动恢复
+        if (binding.etThreshold.text.isNullOrEmpty() && savedState.targetThreshold != null) {
+            binding.etThreshold.setText("%.2f".format(savedState.targetThreshold))
+        }
+
+        // 2. 检查电池优化白名单，避免熄屏/切后台后系统冻结闹钟与网络
+        checkBatteryOptimization()
     }
 
     private fun initViews() {
@@ -93,12 +114,50 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "金价监控服务已停止", Toast.LENGTH_SHORT).show()
     }
 
+    /**
+     * 实时监听服务状态流（当界面处于前台 STARTED 状态时自动无缝刷新）
+     */
     private fun observeServiceState() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 GoldPriceService.monitorState.collect { state ->
                     updateUi(state)
                 }
+            }
+        }
+    }
+
+    /**
+     * 检查并引导用户将应用加入电池优化白名单（无限制后台网络与唤醒）
+     */
+    private fun checkBatteryOptimization() {
+        if (hasPromptedBatteryOptimization) return
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            try {
+                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+                if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                    hasPromptedBatteryOptimization = true
+                    AlertDialog.Builder(this)
+                        .setTitle("后台长效运行权限")
+                        .setMessage("为了防止应用在熄屏休眠或切到后台时被系统掐断网络和定时更新，请允许本应用忽略电池优化（无限制后台运行）。")
+                        .setPositiveButton("去设置") { _, _ ->
+                            try {
+                                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                    data = Uri.parse("package:$packageName")
+                                }
+                                startActivity(intent)
+                            } catch (e: Exception) {
+                                try {
+                                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                                } catch (_: Exception) {}
+                            }
+                        }
+                        .setNegativeButton("稍后", null)
+                        .show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
