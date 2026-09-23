@@ -57,6 +57,11 @@ class GoldPriceService : Service() {
         const val ACTION_START = "com.example.jinjia.ACTION_START"
         const val ACTION_POLL = "com.example.jinjia.ACTION_POLL"
         const val ACTION_STOP = "com.example.jinjia.ACTION_STOP"
+        const val ACTION_ENTER_FOREGROUND = "com.example.jinjia.ACTION_ENTER_FOREGROUND"
+        const val ACTION_ENTER_BACKGROUND = "com.example.jinjia.ACTION_ENTER_BACKGROUND"
+
+        const val BACKGROUND_INTERVAL_MS = 5 * 60 * 1000L // 后台休眠固定 5 分钟 (300,000ms)
+        const val FOREGROUND_INTERVAL_MS = 60 * 1000L      // 前台活跃固定 1 分钟 (60,000ms)
 
         const val EXTRA_TARGET_ID = "extra_target_id"
         const val EXTRA_TARGET_NAME = "extra_target_name"
@@ -142,6 +147,7 @@ class GoldPriceService : Service() {
     private var targetThreshold: Double = 0.0
     private var intervalMinutes: Double = 5.0
     private var hasAlerted: Boolean = false
+    private var isAppInForeground: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -184,6 +190,17 @@ class GoldPriceService : Service() {
 
                     startMonitorService()
                 }
+                ACTION_ENTER_FOREGROUND -> {
+                    isAppInForeground = true
+                    Log.i(TAG, "App entered foreground: active UI sync")
+                }
+                ACTION_ENTER_BACKGROUND -> {
+                    isAppInForeground = false
+                    Log.i(TAG, "App entered background: switched to 5-minute background polling")
+                    if (_monitorState.value.isRunning) {
+                        scheduleSafeAlarm()
+                    }
+                }
                 ACTION_POLL -> {
                     if (_monitorState.value.isRunning) {
                         Log.i(TAG, "Safe alarm triggered in background")
@@ -209,9 +226,10 @@ class GoldPriceService : Service() {
     }
 
     private fun promoteToForeground() {
+        val modeDesc = if (isAppInForeground) "前台1m" else "后台5m"
         val notification = buildMonitorNotification(
             priceText = "【$targetTitle】正在监控...",
-            detailText = "阈值: ¥%.2f | 间隔: %.1f分钟".format(targetThreshold, intervalMinutes)
+            detailText = "阈值: ¥%.2f | 频率: %s".format(targetThreshold, modeDesc)
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ServiceCompat.startForeground(
@@ -249,7 +267,8 @@ class GoldPriceService : Service() {
                     Log.e(TAG, "Coroutine loop error: ${t.message}", t)
                 }
                 scheduleSafeAlarm()
-                val delayMs = (intervalMinutes * 60 * 1000L).toLong().coerceAtLeast(30_000L)
+                // 自适应轮询间隔：前台1分钟，后台固定5分钟 (300,000ms)
+                val delayMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
                 delay(delayMs)
             }
         }
@@ -281,7 +300,8 @@ class GoldPriceService : Service() {
      */
     private fun scheduleSafeAlarm() {
         try {
-            val intervalMs = (intervalMinutes * 60 * 1000L).toLong().coerceAtLeast(30_000L)
+            // 前台活跃 1 分钟，后台常驻固定 5 分钟 (300,000ms) 防 Doze 唤醒
+            val intervalMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
             val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMs
             val pendingIntent = getPollPendingIntent()
 
@@ -298,7 +318,7 @@ class GoldPriceService : Service() {
                     pendingIntent
                 )
             }
-            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s")
+            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s (foreground=$isAppInForeground)")
         } catch (t: Throwable) {
             Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
         }

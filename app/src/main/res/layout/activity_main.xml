@@ -70,12 +70,12 @@
                         android:textStyle="bold" />
                 </LinearLayout>
 
-                <!-- 大字号主价格看板与浮动角标 -->
+                <!-- 大字号主价格看板与浮动角标 + 手动刷新按钮 -->
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:gravity="bottom"
+                    android:gravity="center_vertical"
                     android:orientation="horizontal">
 
                     <TextView
@@ -92,7 +92,6 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginStart="8dp"
-                        android:layout_marginBottom="6dp"
                         android:background="@drawable/bg_price_badge"
                         android:paddingHorizontal="6dp"
                         android:paddingVertical="2dp"
@@ -100,6 +99,28 @@
                         android:textColor="@color/gold_primary_dark"
                         android:textSize="11sp"
                         android:textStyle="bold" />
+
+                    <View
+                        android:layout_width="0dp"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnManualRefresh"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="wrap_content"
+                        android:layout_height="36dp"
+                        android:insetTop="0dp"
+                        android:insetBottom="0dp"
+                        android:paddingHorizontal="14dp"
+                        android:paddingVertical="0dp"
+                        android:text="🔄 刷新"
+                        android:textColor="@color/gold_primary_dark"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="18dp"
+                        app:strokeColor="@color/gold_primary"
+                        app:strokeWidth="1dp" />
                 </LinearLayout>
 
                 <!-- 极细分割线 -->

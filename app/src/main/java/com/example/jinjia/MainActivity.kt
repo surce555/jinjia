@@ -28,7 +28,10 @@ import com.example.jinjia.databinding.ActivityMainBinding
 import com.example.jinjia.databinding.DialogDisplaySettingsBinding
 import com.google.android.material.tabs.TabLayout
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
@@ -41,6 +44,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var goldItemAdapter: GoldItemAdapter
 
     private var hasPromptedBatteryOptimization = false
+    private var foregroundRefreshJob: Job? = null
 
     // 统一标的数据列表，初始置入 DEFAULT_TARGETS，确保任何时候绝不为空白
     private val allTargetsList = mutableListOf<GoldItem>()
@@ -113,7 +117,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         try {
-            // 读取本地持久化缓存直出界面
+            // 1. 读取本地持久化缓存直出界面
             val saved = GoldPriceService.getSavedState(this)
             updateUi(saved)
 
@@ -124,21 +128,111 @@ class MainActivity : AppCompatActivity() {
                 filterAndDisplayList()
             }
 
+            // 2. 通知后台服务切入前台活跃模式
+            try {
+                startService(Intent(this, GoldPriceService::class.java).apply {
+                    action = GoldPriceService.ACTION_ENTER_FOREGROUND
+                })
+            } catch (_: Throwable) {}
+
+            // 3. 第一时间立即静默拉取一次最新数据
+            fetchGoldDataImmediately(isSilent = true)
+
+            // 4. 启动前台每 60 秒 (1 分钟) 自动刷新协程循环
+            foregroundRefreshJob?.cancel()
+            foregroundRefreshJob = lifecycleScope.launch {
+                while (isActive) {
+                    delay(60_000L) // 前台活跃固定 1 分钟轮询
+                    if (isActive) {
+                        fetchGoldDataImmediately(isSilent = true)
+                    }
+                }
+            }
+
             checkBatteryOptimization()
         } catch (t: Throwable) {
             Log.e("MainActivity", "Error in onResume: ${t.message}", t)
         }
     }
 
+    override fun onPause() {
+        super.onPause()
+        try {
+            // 1. 暂停前台 1 分钟高频协程循环，避免熄屏/切后台时无谓消耗
+            foregroundRefreshJob?.cancel()
+            foregroundRefreshJob = null
+
+            // 2. 通知后台监控服务切入后台 5 分钟常驻模式
+            try {
+                startService(Intent(this, GoldPriceService::class.java).apply {
+                    action = GoldPriceService.ACTION_ENTER_BACKGROUND
+                })
+            } catch (_: Throwable) {}
+        } catch (t: Throwable) {
+            Log.e("MainActivity", "Error in onPause: ${t.message}", t)
+        }
+    }
+
+    /**
+     * 手动刷新功能：防连续点击、优先快速刷新当前选中标的并全量更新
+     */
+    private fun manualRefreshPrice() {
+        binding.btnManualRefresh.isEnabled = false
+        binding.btnManualRefresh.text = "🔄 刷新中"
+
+        val target = selectedTargetItem ?: allTargetsList.firstOrNull()
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                // 1. 若当前为高频实时机构，单独快速请求以秒级极速呈现最新价格
+                if (target != null && target.id.startsWith("realtime_")) {
+                    val code = target.id.removePrefix("realtime_")
+                    val singleItem = GoldRepository.fetchRealtimeBank(code)
+                    if (singleItem != null) {
+                        withContext(Dispatchers.Main) {
+                            setTargetItem(singleItem)
+                        }
+                    }
+                }
+
+                // 2. 触发全局行情同步
+                fetchGoldDataInternal(isSilent = false)
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "已更新至最新金价", Toast.LENGTH_SHORT).show()
+                }
+            } catch (t: Throwable) {
+                Log.e("MainActivity", "manualRefreshPrice error: ${t.message}", t)
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, "刷新提示: ${t.message}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                delay(1200L) // 1.2 秒防重复点击防抖
+                withContext(Dispatchers.Main) {
+                    binding.btnManualRefresh.isEnabled = true
+                    binding.btnManualRefresh.text = "🔄 刷新"
+                }
+            }
+        }
+    }
+
     /**
      * 进入 App 时的冷启动即时并发双数据源拉取（无需点击启动监控）
      */
-    private fun fetchGoldDataImmediately() {
-        val currentState = GoldPriceService.monitorState.value
-        if (!currentState.isRunning) {
-            binding.tvServiceStatus.text = "● 同步行情中..."
-            binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_gray)
-            binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.text_secondary))
+    private fun fetchGoldDataImmediately(isSilent: Boolean = false) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            fetchGoldDataInternal(isSilent)
+        }
+    }
+
+    private suspend fun fetchGoldDataInternal(isSilent: Boolean) {
+        withContext(Dispatchers.Main) {
+            val currentState = GoldPriceService.monitorState.value
+            if (!currentState.isRunning && !isSilent) {
+                binding.tvServiceStatus.text = "● 同步行情中..."
+                binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_gray)
+                binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_secondary))
+            }
         }
 
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -321,6 +415,11 @@ class MainActivity : AppCompatActivity() {
         // 核心 AI 辅助分析：一键复制走势给 AI 分析
         binding.btnCopyAiPrompt.setOnClickListener {
             copyAiAnalysisPrompt()
+        }
+
+        // 手动刷新按钮
+        binding.btnManualRefresh.setOnClickListener {
+            manualRefreshPrice()
         }
     }
 
@@ -708,7 +807,7 @@ ${sbPoints.toString().trimEnd()}
 
         // 2. 状态胶囊 Badge 展现
         if (state.isRunning) {
-            binding.tvServiceStatus.text = "● 监控中 (%.1fm)".format(state.intervalMinutes)
+            binding.tvServiceStatus.text = "● 监控中 (自适应)"
             binding.tvServiceStatus.setBackgroundResource(R.drawable.bg_status_chip_green)
             binding.tvServiceStatus.setTextColor(ContextCompat.getColor(this, R.color.status_green))
         } else {
@@ -729,7 +828,7 @@ ${sbPoints.toString().trimEnd()}
             binding.tvTargetPrice.text = "$symbol %.2f %s".format(state.targetPrice, unit)
         }
 
-        // 4. 设定阈值与刷新频率
+        // 4. 设定阈值与刷新频率 (前台1分钟，后台固定5分钟)
         if (state.targetThreshold != null && state.targetThreshold > 0) {
             val symbol = if (state.targetTitle.contains("伦敦金") || state.targetId == "realtime_gj") "$" else "¥"
             binding.tvCurrentThreshold.text = "$symbol %.2f".format(state.targetThreshold)
@@ -739,7 +838,7 @@ ${sbPoints.toString().trimEnd()}
         } else {
             binding.tvCurrentThreshold.text = "未设置"
         }
-        binding.tvCurrentInterval.text = "%.1f 分钟".format(state.intervalMinutes)
+        binding.tvCurrentInterval.text = "前台1m / 后台5m"
 
         // 5. 更新时间
         if (state.updateTime != null && state.updateTime > 0) {
