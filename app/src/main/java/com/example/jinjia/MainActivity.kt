@@ -467,6 +467,11 @@ class MainActivity : AppCompatActivity() {
         binding.btnManualRefresh.setOnClickListener {
             manualRefreshPrice()
         }
+
+        // 小米/澎湃 OS 系统锁屏通知与保活设置向导
+        binding.btnHyperOsGuide.setOnClickListener {
+            showHyperOsGuideDialog()
+        }
     }
 
     /**
@@ -928,8 +933,43 @@ ${sbPoints.toString().trimEnd()}
         }
     }
 
+    /**
+     * 小米澎湃 OS (HyperOS) / MIUI 锁屏通知与后台保活设置专向弹窗
+     */
+    private fun showHyperOsGuideDialog() {
+        val options = arrayOf(
+            "1. 前往通知管理（开启【锁屏通知】与【悬浮通知】）",
+            "2. 前往省电策略（修改为【无限制】，防止熄屏冻结）",
+            "3. 前往权限管理（开启【自启动】与【后台弹出界面】）"
+        )
+        AlertDialog.Builder(this)
+            .setTitle("⚙️ 小米/澎湃系统锁屏通知必开指南")
+            .setMessage("由于小米澎湃 OS（HyperOS/MIUI）严格的系统安全策略，第三方应用安装后默认屏蔽锁屏通知并在熄屏时冻结后台。\n\n为确保锁屏后能准时亮屏报警，请依次开启以下设置项：")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> XiaomiPermissionHelper.openNotificationSettings(this)
+                    1 -> XiaomiPermissionHelper.openBatterySettings(this)
+                    2 -> XiaomiPermissionHelper.openPermissionsSettings(this)
+                }
+            }
+            .setPositiveButton("前往开启通知设置") { _, _ ->
+                XiaomiPermissionHelper.openNotificationSettings(this)
+            }
+            .setNeutralButton("前往省电设置") { _, _ ->
+                XiaomiPermissionHelper.openBatterySettings(this)
+            }
+            .setNegativeButton("我知道了", null)
+            .show()
+    }
+
     private fun checkBatteryOptimization() {
         if (hasPromptedBatteryOptimization) return
+
+        if (XiaomiPermissionHelper.isXiaomi()) {
+            hasPromptedBatteryOptimization = true
+            showHyperOsGuideDialog()
+            return
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             try {

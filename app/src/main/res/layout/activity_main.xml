@@ -439,6 +439,21 @@
                         app:strokeWidth="1dp" />
                 </LinearLayout>
 
+                <!-- 小米澎湃 OS / MIUI 锁屏通知与保活设置向导 -->
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnHyperOsGuide"
+                    style="@style/Widget.MaterialComponents.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="38dp"
+                    android:layout_marginTop="8dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:padding="0dp"
+                    android:text="⚙️ 小米/澎湃系统锁屏通知与保活必开指引"
+                    android:textColor="@color/gold_primary_dark"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 

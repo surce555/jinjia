@@ -157,6 +157,7 @@ class GoldPriceService : Service() {
     private var hasAlerted: Boolean = false
     private var isAppInForeground: Boolean = false
     private var alertCounter: Int = 0
+    private var test30sWakeLock: PowerManager.WakeLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -327,6 +328,22 @@ class GoldPriceService : Service() {
         cancelTestAlarm()
         testJob?.cancel()
 
+        // 针对 30 秒短时间测试持有 PARTIAL_WAKE_LOCK，彻底阻止小米 HyperOS 锁屏后瞬间冻结 CPU
+        if (delayMs <= 60_000L) {
+            try {
+                test30sWakeLock?.let { if (it.isHeld) it.release() }
+                test30sWakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "Jinjia:Test30sWakeLock"
+                ).apply {
+                    acquire(delayMs + 8_000L)
+                }
+                Log.i(TAG, "Acquired 30s test WakeLock for ${delayMs + 8000}ms")
+            } catch (t: Throwable) {
+                Log.w(TAG, "WakeLock acquire error: ${t.message}")
+            }
+        }
+
         // 1. AlarmManager 定时精准唤醒
         try {
             val intent = Intent(this, GoldPriceService::class.java).apply {
@@ -351,7 +368,7 @@ class GoldPriceService : Service() {
             Log.w(TAG, "scheduleTestAlarm error: ${t.message}")
         }
 
-        // 2. 协程并发双保险（在设备亮屏未休眠时准时推送）
+        // 2. 协程并发双保险（在持有 WakeLock 下，即使熄屏 CPU 也不休眠，准时触发）
         testJob = serviceScope.launch {
             delay(delayMs)
             sendTestNotification(modeDesc)
@@ -359,6 +376,11 @@ class GoldPriceService : Service() {
     }
 
     private fun cancelTestAlarm() {
+        try {
+            test30sWakeLock?.let { if (it.isHeld) it.release() }
+            test30sWakeLock = null
+        } catch (_: Throwable) {}
+
         try {
             val intent = Intent(this, GoldPriceService::class.java).apply {
                 action = ACTION_TEST_NOTIFICATION
@@ -378,10 +400,22 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 发送隐藏测试通知（用于验证手机锁屏/休眠状态下的亮屏与通知送达）
+     * 发送隐藏测试通知（支持硬件级响铃振动穿透小米 HyperOS 锁屏静音策略）
      */
     private fun sendTestNotification(modeDesc: String) {
+        // 释放 30s 唤醒锁
+        try {
+            test30sWakeLock?.let { if (it.isHeld) it.release() }
+            test30sWakeLock = null
+        } catch (_: Throwable) {}
+
+        // 1. 唤醒屏幕
         wakeUpScreen()
+
+        // 2. 触发系统级硬件声音与振动直出（穿透 HyperOS 锁屏屏蔽）
+        playAlertSoundAndVibration()
+
+        // 3. 构建最高优先级通知
         val pendingIntent = createContentPendingIntent()
 
         val testNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
@@ -390,7 +424,7 @@ class GoldPriceService : Service() {
             .setContentText("触发模式: $modeDesc 延迟推送。手机锁屏与后台休眠唤醒测试成功！")
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！")
+                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！\n\n提示：若屏幕未亮或通知被折叠，请在小米系统设置中开启本应用的【锁屏通知】与【后台弹出界面】权限。")
             )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
@@ -665,6 +699,52 @@ class GoldPriceService : Service() {
         } catch (_: Throwable) {}
     }
 
+    /**
+     * 强力系统级振动与音频直出（通过 USAGE_ALARM 穿透锁屏与部分系统的静音屏蔽）
+     */
+    private fun playAlertSoundAndVibration() {
+        // 1. 硬件振动
+        try {
+            val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
+                vm?.defaultVibrator ?: (getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator)
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                vibrator?.vibrate(
+                    android.os.VibrationEffect.createWaveform(
+                        longArrayOf(0, 600, 200, 600, 200, 800),
+                        -1
+                    )
+                )
+            } else {
+                @Suppress("DEPRECATION")
+                vibrator?.vibrate(longArrayOf(0, 600, 200, 600, 200, 800), -1)
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Direct vibration error: ${t.message}")
+        }
+
+        // 2. 闹钟级别音频直出 (USAGE_ALARM 穿透锁屏/勿扰)
+        try {
+            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = RingtoneManager.getRingtone(applicationContext, alertUri)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                ringtone.audioAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ALARM)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            }
+            ringtone.play()
+        } catch (t: Throwable) {
+            Log.e(TAG, "Direct ringtone error: ${t.message}")
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun wakeUpScreen() {
         try {
@@ -680,6 +760,7 @@ class GoldPriceService : Service() {
 
     private fun sendAlertNotification(title: String, price: Double, threshold: Double, unit: String) {
         wakeUpScreen()
+        playAlertSoundAndVibration()
 
         val pendingIntent = createContentPendingIntent()
         val symbol = if (unit.contains("美元") || unit.contains("$") || title.contains("伦敦金")) "$" else "¥"
