@@ -10,8 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
-import android.media.AudioAttributes
-import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -75,7 +73,7 @@ class GoldPriceService : Service() {
         const val EXTRA_TEST_MODE = "extra_test_mode"
 
         const val CHANNEL_MONITOR_ID = "gold_monitor_channel"
-        const val CHANNEL_ALERT_ID = "gold_alert_channel_v2" // v2 确保带声音振动与锁屏最高可见性
+        const val CHANNEL_ALERT_ID = "gold_alert_channel_v3" // v3 纯强力振动通知，彻底静音关闭声音
 
         const val NOTIFICATION_MONITOR_ID = 1001
         const val NOTIFICATION_ALERT_ID = 2001
@@ -155,6 +153,8 @@ class GoldPriceService : Service() {
     private var targetThreshold: Double = 0.0
     private var intervalMinutes: Double = 5.0
     private var hasAlerted: Boolean = false
+    private var lastAlertTime: Long = 0L
+    private var lastAlertPrice: Double = 0.0
     private var isAppInForeground: Boolean = false
     private var alertCounter: Int = 0
     private var test30sWakeLock: PowerManager.WakeLock? = null
@@ -195,6 +195,8 @@ class GoldPriceService : Service() {
                     if (threshold > 0) {
                         targetThreshold = threshold
                         hasAlerted = false // 重新设置阈值时复位告警状态机
+                        lastAlertTime = 0L
+                        lastAlertPrice = 0.0
                     }
                     intervalMinutes = interval.coerceAtLeast(0.5)
 
@@ -344,7 +346,7 @@ class GoldPriceService : Service() {
             }
         }
 
-        // 1. AlarmManager 定时精准唤醒
+        // 1. AlarmManager 定时精准唤醒（使用系统最高优先级 setAlarmClock 穿透 Doze 休眠）
         try {
             val intent = Intent(this, GoldPriceService::class.java).apply {
                 action = ACTION_TEST_NOTIFICATION
@@ -361,8 +363,7 @@ class GoldPriceService : Service() {
                 PendingIntent.getService(this, 1003, intent, flags)
             }
 
-            val triggerAt = SystemClock.elapsedRealtime() + delayMs
-            scheduleExactOrAllowWhileIdle(triggerAt, pendingIntent)
+            scheduleAlarmWithAlarmClock(delayMs, pendingIntent)
             Log.i(TAG, "Test notification alarm scheduled after $delayMs ms ($modeDesc)")
         } catch (t: Throwable) {
             Log.w(TAG, "scheduleTestAlarm error: ${t.message}")
@@ -400,7 +401,7 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 发送隐藏测试通知（支持硬件级响铃振动穿透小米 HyperOS 锁屏静音策略）
+     * 发送隐藏测试通知（支持硬件级强力振动直出，彻底静音关闭声音，穿透小米 HyperOS 锁屏）
      */
     private fun sendTestNotification(modeDesc: String) {
         // 释放 30s 唤醒锁
@@ -412,47 +413,75 @@ class GoldPriceService : Service() {
         // 1. 唤醒屏幕
         wakeUpScreen()
 
-        // 2. 触发系统级硬件声音与振动直出（穿透 HyperOS 锁屏屏蔽）
-        playAlertSoundAndVibration()
+        // 2. 触发系统级硬件强力振动直出（关闭声音，纯振动穿透）
+        playAlertVibrationOnly()
 
-        // 3. 构建最高优先级通知
+        // 3. 构建最高优先级通知 (纯振动，静音)
         val pendingIntent = createContentPendingIntent()
 
         val testNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
             .setSmallIcon(R.drawable.ic_gold)
             .setContentTitle("【金价盯盘】锁屏测试通知到达！")
-            .setContentText("触发模式: $modeDesc 延迟推送。手机锁屏与后台休眠唤醒测试成功！")
+            .setContentText("触发模式: $modeDesc 延迟推送。手机锁屏与后台休眠唤醒测试成功！(纯振动)")
             .setStyle(
                 NotificationCompat.BigTextStyle()
-                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！\n\n提示：若屏幕未亮或通知被折叠，请在小米系统设置中开启本应用的【锁屏通知】与【后台弹出界面】权限。")
+                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送（纯振动模式）。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！\n\n提示：若屏幕未亮或通知被折叠，请在小米系统设置中开启本应用的【锁屏通知】与【后台弹出界面】权限。")
             )
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setSound(null)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setVibrate(longArrayOf(0, 800, 300, 800, 300, 800))
             .setFullScreenIntent(pendingIntent, true)
             .setContentIntent(pendingIntent)
             .build()
 
         notificationManager.notify(NOTIFICATION_TEST_ID, testNotification)
-        Log.i(TAG, "Test notification dispatched ($modeDesc)")
+        Log.i(TAG, "Test notification dispatched ($modeDesc, vibration only)")
     }
 
     /**
-     * 适配 Android 6+ 至 14+ 的精准闹钟调度
+     * 适配 Android 6+ 至 14+ 的系统级 AlarmClock 精准闹钟调度
+     * AlarmClockInfo 享有系统最高优先级，不受 Doze 深度休眠限制，到点准时唤醒 CPU
      */
     private fun scheduleSafeAlarm() {
         try {
             val intervalMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
-            val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMs
             val pendingIntent = getPollPendingIntent()
 
-            scheduleExactOrAllowWhileIdle(triggerAtMillis, pendingIntent)
+            scheduleAlarmWithAlarmClock(intervalMs, pendingIntent)
             Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s (foreground=$isAppInForeground)")
         } catch (t: Throwable) {
             Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
         }
+    }
+
+    private fun scheduleAlarmWithAlarmClock(delayMs: Long, pendingIntent: PendingIntent) {
+        val showIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val triggerAtWallClock = System.currentTimeMillis() + delayMs
+        val triggerAtElapsed = SystemClock.elapsedRealtime() + delayMs
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val clockInfo = AlarmManager.AlarmClockInfo(triggerAtWallClock, showIntent)
+                alarmManager.setAlarmClock(clockInfo, pendingIntent)
+                Log.i(TAG, "setAlarmClock scheduled successfully: delay=${delayMs}ms")
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "setAlarmClock failed, falling back to exact idle: ${t.message}")
+            }
+        }
+
+        scheduleExactOrAllowWhileIdle(triggerAtElapsed, pendingIntent)
     }
 
     private fun scheduleExactOrAllowWhileIdle(triggerAtMillis: Long, pendingIntent: PendingIntent) {
@@ -511,40 +540,98 @@ class GoldPriceService : Service() {
 
     /**
      * 核心网络拉取与指定标的预警比对
+     * 针对锁屏深睡唤醒提供网络重试机制（防止基带休眠未就绪抛出异常）
      */
     private suspend fun fetchPriceAndEvaluate() {
         val wakeLock = try {
             powerManager.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
                 "Jinjia:NetworkWakeLock"
-            ).apply { acquire(30_000L) }
+            ).apply { acquire(45_000L) }
         } catch (_: Throwable) {
             null
         }
 
         try {
-            if (targetId.startsWith("realtime_")) {
-                val bankCode = targetId.removePrefix("realtime_")
-                val item = GoldRepository.fetchRealtimeBank(bankCode)
-                if (item != null) {
-                    handleSingleItemUpdate(item)
-                } else {
-                    handleFetchError("实时机构【$targetTitle】接口响应超时")
-                }
-            } else {
-                val (allItems, jsonString) = GoldRepository.fetchGoldData()
-                if (allItems.isNotEmpty()) {
-                    handleParsedData(allItems, jsonString)
+            var retryCount = 0
+            var success = false
+            while (retryCount < 3 && !success) {
+                try {
+                    if (targetId.startsWith("realtime_")) {
+                        val bankCode = targetId.removePrefix("realtime_")
+                        val item = GoldRepository.fetchRealtimeBank(bankCode)
+                        if (item != null) {
+                            handleSingleItemUpdate(item)
+                            success = true
+                        } else {
+                            retryCount++
+                            if (retryCount < 3) delay(1500L)
+                        }
+                    } else {
+                        val (allItems, jsonString) = GoldRepository.fetchGoldData()
+                        if (allItems.isNotEmpty()) {
+                            handleParsedData(allItems, jsonString)
+                            success = true
+                        } else {
+                            retryCount++
+                            if (retryCount < 3) delay(1500L)
+                        }
+                    }
+                } catch (e: Exception) {
+                    retryCount++
+                    Log.w(TAG, "Network attempt $retryCount failed: ${e.message}")
+                    if (retryCount < 3) {
+                        delay(1500L)
+                    } else {
+                        throw e
+                    }
                 }
             }
+
+            if (!success) {
+                handleFetchError("机构【$targetTitle】响应超时")
+            }
         } catch (t: Throwable) {
-            Log.e(TAG, "Fetch failed: ${t.message}", t)
+            Log.e(TAG, "Fetch failed after retries: ${t.message}", t)
             handleFetchError(t.message ?: t.javaClass.simpleName)
         } finally {
             try {
                 if (wakeLock?.isHeld == true) wakeLock.release()
             } catch (_: Throwable) {}
         }
+    }
+
+    /**
+     * 评估是否触发跌破预警（支持首次跌破、深跌追加告警与长周期防漏看）
+     */
+    private fun shouldTriggerAlert(currentPrice: Double, threshold: Double): Boolean {
+        if (threshold <= 0 || currentPrice <= 0) return false
+        if (threshold == THRESHOLD_TEST_30S || threshold == THRESHOLD_TEST_5M) return false
+        if (currentPrice >= threshold) {
+            hasAlerted = false
+            return false
+        }
+        val now = System.currentTimeMillis()
+        // 首次跌破阈值，立即告警
+        if (!hasAlerted) {
+            hasAlerted = true
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        // 已告警过，若价格进一步深跌 >= 1.0 元，再次触发强力振动告警
+        if (currentPrice <= lastAlertPrice - 1.0) {
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        // 或者持续处于低位且距离上次告警超过 30 分钟，再次振动提醒防漏看
+        if (now - lastAlertTime >= 30 * 60 * 1000L) {
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        return false
     }
 
     /**
@@ -558,15 +645,8 @@ class GoldPriceService : Service() {
         targetTitle = currentTitle
 
         // 1. 边缘触发告警状态机（低于阈值推送通知）
-        if (targetThreshold > 0 && currentPrice > 0 && targetThreshold != THRESHOLD_TEST_30S && targetThreshold != THRESHOLD_TEST_5M) {
-            if (currentPrice < targetThreshold) {
-                if (!hasAlerted) {
-                    sendAlertNotification(currentTitle, currentPrice, targetThreshold, item.unit)
-                    hasAlerted = true
-                }
-            } else {
-                hasAlerted = false // 价格回升，自动复位
-            }
+        if (shouldTriggerAlert(currentPrice, targetThreshold)) {
+            sendAlertNotification(currentTitle, currentPrice, targetThreshold, item.unit)
         }
 
         // 2. 合并更新本地全量列表
@@ -620,15 +700,8 @@ class GoldPriceService : Service() {
         targetTitle = currentTitle
 
         // 1. 边缘触发告警状态机
-        if (targetThreshold > 0 && currentPrice > 0 && targetThreshold != THRESHOLD_TEST_30S && targetThreshold != THRESHOLD_TEST_5M) {
-            if (currentPrice < targetThreshold) {
-                if (!hasAlerted) {
-                    sendAlertNotification(currentTitle, currentPrice, targetThreshold, targetItem.unit)
-                    hasAlerted = true
-                }
-            } else {
-                hasAlerted = false
-            }
+        if (shouldTriggerAlert(currentPrice, targetThreshold)) {
+            sendAlertNotification(currentTitle, currentPrice, targetThreshold, targetItem.unit)
         }
 
         // 2. 更新状态并持久化
@@ -700,10 +773,9 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 强力系统级振动与音频直出（通过 USAGE_ALARM 穿透锁屏与部分系统的静音屏蔽）
+     * 强力系统级振动直出（关闭声音，纯振动穿透锁屏与部分系统的静音策略）
      */
-    private fun playAlertSoundAndVibration() {
-        // 1. 硬件振动
+    private fun playAlertVibrationOnly() {
         try {
             val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 val vm = getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? android.os.VibratorManager
@@ -713,35 +785,21 @@ class GoldPriceService : Service() {
                 getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
             }
 
+            val pattern = longArrayOf(0, 800, 300, 800, 300, 800)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 vibrator?.vibrate(
                     android.os.VibrationEffect.createWaveform(
-                        longArrayOf(0, 600, 200, 600, 200, 800),
+                        pattern,
                         -1
                     )
                 )
             } else {
                 @Suppress("DEPRECATION")
-                vibrator?.vibrate(longArrayOf(0, 600, 200, 600, 200, 800), -1)
+                vibrator?.vibrate(pattern, -1)
             }
+            Log.i(TAG, "Direct vibration executed successfully (sound disabled)")
         } catch (t: Throwable) {
             Log.e(TAG, "Direct vibration error: ${t.message}")
-        }
-
-        // 2. 闹钟级别音频直出 (USAGE_ALARM 穿透锁屏/勿扰)
-        try {
-            val alertUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val ringtone = RingtoneManager.getRingtone(applicationContext, alertUri)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                ringtone.audioAttributes = AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_ALARM)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                    .build()
-            }
-            ringtone.play()
-        } catch (t: Throwable) {
-            Log.e(TAG, "Direct ringtone error: ${t.message}")
         }
     }
 
@@ -760,7 +818,7 @@ class GoldPriceService : Service() {
 
     private fun sendAlertNotification(title: String, price: Double, threshold: Double, unit: String) {
         wakeUpScreen()
-        playAlertSoundAndVibration()
+        playAlertVibrationOnly()
 
         val pendingIntent = createContentPendingIntent()
         val symbol = if (unit.contains("美元") || unit.contains("$") || title.contains("伦敦金")) "$" else "¥"
@@ -777,7 +835,9 @@ class GoldPriceService : Service() {
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setSound(null)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setVibrate(longArrayOf(0, 800, 300, 800, 300, 800))
             .setFullScreenIntent(pendingIntent, true)
             .setContentIntent(pendingIntent)
             .build()
@@ -821,6 +881,12 @@ class GoldPriceService : Service() {
 
     private fun createNotificationChannels() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            // 清理历史旧通道，确保通道静音配置即时生效
+            try {
+                notificationManager.deleteNotificationChannel("gold_alert_channel")
+                notificationManager.deleteNotificationChannel("gold_alert_channel_v2")
+            } catch (_: Throwable) {}
+
             val monitorChannel = NotificationChannel(
                 CHANNEL_MONITOR_ID,
                 getString(R.string.notification_channel_monitor_name),
@@ -831,25 +897,19 @@ class GoldPriceService : Service() {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
 
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val audioAttributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-
             val alertChannel = NotificationChannel(
                 CHANNEL_ALERT_ID,
                 getString(R.string.notification_channel_alert_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "当金价低于监控阈值或测试时弹出高优先级横幅告警并亮屏"
+                description = "当金价低于监控阈值或测试时弹出高优先级横幅告警并强力振动（无声音）"
                 enableVibration(true)
-                vibrationPattern = longArrayOf(0, 500, 200, 500)
+                vibrationPattern = longArrayOf(0, 800, 300, 800, 300, 800)
                 enableLights(true)
                 lightColor = Color.YELLOW
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
-                setSound(soundUri, audioAttributes)
+                setSound(null, null) // 彻底静音，仅保留振动
             }
 
             notificationManager.createNotificationChannel(monitorChannel)
