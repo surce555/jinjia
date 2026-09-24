@@ -41,7 +41,7 @@ class GlassTrendChartView @JvmOverloads constructor(
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2.5f.toPx()
-        color = Color.parseColor("#D4AF37")
+        color = Color.parseColor("#2563EB") // 科技深蓝曲线
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
@@ -59,64 +59,70 @@ class GlassTrendChartView @JvmOverloads constructor(
     private val gridDashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f.toPx()
-        color = Color.parseColor("#33D4AF37")
+        color = Color.parseColor("#332563EB")
         pathEffect = DashPathEffect(floatArrayOf(4f.toPx(), 4f.toPx()), 0f)
     }
 
     private val bubbleBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#F5FFFFFF")
+        color = Color.parseColor("#F8FFFFFF")
     }
 
     private val bubbleStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f.toPx()
-        color = Color.parseColor("#80D4AF37")
+        color = Color.parseColor("#332563EB")
     }
 
-    private val bubbleTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    private val bubbleTextMaxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 9.5f.toSp()
         isFakeBoldText = true
-        color = Color.parseColor("#B89038")
+        color = Color.parseColor("#059669") // 翡翠冷绿高点
+    }
+
+    private val bubbleTextMinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 9.5f.toSp()
+        isFakeBoldText = true
+        color = Color.parseColor("#DC2626") // 警示冷红低点
     }
 
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#D4AF37")
+        color = Color.parseColor("#2563EB")
     }
 
     private val dotHaloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#33D4AF37")
+        color = Color.parseColor("#252563EB")
     }
 
     private val emptyTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 12f.toSp()
-        color = Color.parseColor("#9CA3AF")
+        color = Color.parseColor("#94A3B8")
         textAlign = Paint.Align.CENTER
     }
 
     // 触摸悬浮气泡
     private val tooltipBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#E6111827") // 深空石墨黑高透
+        color = Color.parseColor("#E60F172A") // 深空石墨冷灰高透
     }
 
     private val tooltipBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f.toPx()
-        color = Color.parseColor("#40FFFFFF")
+        color = Color.parseColor("#33CBD5E1")
     }
 
     private val tooltipTimePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 10f.toSp()
-        color = Color.parseColor("#9CA3AF")
+        color = Color.parseColor("#94A3B8")
     }
 
     private val tooltipPricePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 11.5f.toSp()
         isFakeBoldText = true
-        color = Color.parseColor("#F3BA2F")
+        color = Color.parseColor("#38BDF8") // 电光冰蓝高亮
     }
 
     private val curvePath = Path()
@@ -221,7 +227,7 @@ class GlassTrendChartView @JvmOverloads constructor(
             curvePath.cubicTo(cx1, cy1, cx2, cy2, currX, currY)
         }
 
-        // 5. 绘制香槟金流光渐变填充
+        // 5. 绘制科技深蓝微光渐变填充
         fillPath.reset()
         fillPath.addPath(curvePath)
         fillPath.lineTo(xs[count - 1], h - paddingBottom)
@@ -230,7 +236,7 @@ class GlassTrendChartView @JvmOverloads constructor(
 
         fillPaint.shader = LinearGradient(
             0f, paddingTop, 0f, h - paddingBottom,
-            intArrayOf(Color.parseColor("#38D4AF37"), Color.parseColor("#00D4AF37")),
+            intArrayOf(Color.parseColor("#262563EB"), Color.parseColor("#002563EB")),
             null,
             Shader.TileMode.CLAMP
         )
@@ -239,7 +245,7 @@ class GlassTrendChartView @JvmOverloads constructor(
         // 6. 绘制曲线轮廓
         canvas.drawPath(curvePath, linePaint)
 
-        // 7. 绘制极值微型气泡与标注 (最高点、最低点)
+        // 7. 绘制极值微型气泡与标注 (最高点翡翠绿、最低点警示红)
         drawValueBubble(canvas, xs[maxIdx], ys[maxIdx], "▲ %.2f".format(maxP), isTop = true, w)
         if (minIdx != maxIdx) {
             drawValueBubble(canvas, xs[minIdx], ys[minIdx], "▼ %.2f".format(minP), isTop = false, w)
@@ -276,7 +282,8 @@ class GlassTrendChartView @JvmOverloads constructor(
         isTop: Boolean,
         containerWidth: Float
     ) {
-        bubbleTextPaint.getTextBounds(text, 0, text.length, textBounds)
+        val textPaint = if (isTop) bubbleTextMaxPaint else bubbleTextMinPaint
+        textPaint.getTextBounds(text, 0, text.length, textBounds)
         val textW = textBounds.width().toFloat()
         val textH = textBounds.height().toFloat()
 
@@ -299,7 +306,7 @@ class GlassTrendChartView @JvmOverloads constructor(
 
         val textX = bubbleLeft + padX
         val textY = bubbleTop + padY + textH
-        canvas.drawText(text, textX, textY, bubbleTextPaint)
+        canvas.drawText(text, textX, textY, textPaint)
 
         // 锚点小实心圆
         canvas.drawCircle(x, y, 2.5f.toPx(), dotPaint)

@@ -906,7 +906,7 @@ class GoldPriceService : Service() {
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 800, 300, 800, 300, 800)
                 enableLights(true)
-                lightColor = Color.YELLOW
+                lightColor = Color.CYAN
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
                 setSound(null, null) // 彻底静音，仅保留振动

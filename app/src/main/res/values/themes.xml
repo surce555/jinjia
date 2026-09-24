@@ -1,20 +1,20 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <style name="Theme.Jinjia" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- 品牌色 (流动香槟金) -->
+        <!-- 品牌色 (极简冷色调金融科技深蓝) -->
         <item name="colorPrimary">@color/gold_primary</item>
         <item name="colorPrimaryVariant">@color/gold_primary_dark</item>
         <item name="colorOnPrimary">@color/white</item>
 
-        <!-- 辅助强调色 -->
+        <!-- 辅助强调色 (翡翠冷绿) -->
         <item name="colorSecondary">@color/gold_accent</item>
         <item name="colorSecondaryVariant">@color/gold_primary_dark</item>
         <item name="colorOnSecondary">@color/text_primary</item>
 
         <!-- 现代金融浅色质感状态栏 -->
-        <item name="android:statusBarColor">#F1F5F9</item>
+        <item name="android:statusBarColor">#F8FAFC</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">true</item>
 
-        <!-- 全局液态流体渐变背景 -->
+        <!-- 全局极简冷灰流体渐变背景 -->
         <item name="android:windowBackground">@drawable/bg_liquid_gradient</item>
     </style>
 </resources>

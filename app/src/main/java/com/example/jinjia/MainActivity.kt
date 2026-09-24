@@ -933,33 +933,83 @@ ${sbPoints.toString().trimEnd()}
         }
     }
 
+    private var hyperOsGuideDialog: AlertDialog? = null
+    private var hasVisitedStep1 = false
+    private var hasVisitedStep2 = false
+    private var hasVisitedStep3 = false
+
     /**
      * 小米澎湃 OS (HyperOS) / MIUI 锁屏通知与后台保活设置专向弹窗
+     * 解决设置返回后弹窗消失问题：弹窗常驻不关闭，直到用户主动点击【确定】才退出
      */
     private fun showHyperOsGuideDialog() {
-        val options = arrayOf(
-            "1. 前往通知管理（开启【锁屏通知】与【悬浮通知】）",
-            "2. 前往省电策略（修改为【无限制】，防止熄屏冻结）",
-            "3. 前往权限管理（开启【自启动】与【后台弹出界面】）"
-        )
-        AlertDialog.Builder(this)
-            .setTitle("⚙️ 小米/澎湃系统锁屏通知必开指南")
-            .setMessage("由于小米澎湃 OS（HyperOS/MIUI）严格的系统安全策略，第三方应用安装后默认屏蔽锁屏通知并在熄屏时冻结后台。\n\n为确保锁屏后能准时亮屏报警，请依次开启以下设置项：")
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> XiaomiPermissionHelper.openNotificationSettings(this)
-                    1 -> XiaomiPermissionHelper.openBatterySettings(this)
-                    2 -> XiaomiPermissionHelper.openPermissionsSettings(this)
-                }
+        if (hyperOsGuideDialog?.isShowing == true) return
+
+        val dialogView = layoutInflater.inflate(R.layout.dialog_hyperos_guide, null)
+        val btnStep1 = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnGuideStep1)
+        val btnStep2 = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnGuideStep2)
+        val btnStep3 = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnGuideStep3)
+        val btnDone = dialogView.findViewById<com.google.android.material.button.MaterialButton>(R.id.btnGuideDone)
+
+        val tvStep1Title = dialogView.findViewById<android.widget.TextView>(R.id.tvGuideStep1Title)
+        val tvStep2Title = dialogView.findViewById<android.widget.TextView>(R.id.tvGuideStep2Title)
+        val tvStep3Title = dialogView.findViewById<android.widget.TextView>(R.id.tvGuideStep3Title)
+
+        fun updateStepStatusUi() {
+            if (hasVisitedStep1) {
+                btnStep1.text = "已前往 ✓"
+                tvStep1Title.text = "1. 开启锁屏与悬浮通知 (已前往)"
             }
-            .setPositiveButton("前往开启通知设置") { _, _ ->
-                XiaomiPermissionHelper.openNotificationSettings(this)
+            if (hasVisitedStep2) {
+                btnStep2.text = "已前往 ✓"
+                tvStep2Title.text = "2. 省电策略设为【无限制】(已前往)"
             }
-            .setNeutralButton("前往省电设置") { _, _ ->
-                XiaomiPermissionHelper.openBatterySettings(this)
+            if (hasVisitedStep3) {
+                btnStep3.text = "已前往 ✓"
+                tvStep3Title.text = "3. 自启动与后台弹出界面 (已前往)"
             }
-            .setNegativeButton("我知道了", null)
-            .show()
+        }
+
+        updateStepStatusUi()
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(true)
+            .create()
+
+        // 步骤1：通知管理（点击不关闭弹窗，方便返回后继续设置步骤2）
+        btnStep1.setOnClickListener {
+            hasVisitedStep1 = true
+            updateStepStatusUi()
+            XiaomiPermissionHelper.openNotificationSettings(this)
+        }
+
+        // 步骤2：省电策略（点击不关闭弹窗，方便返回后继续设置步骤3）
+        btnStep2.setOnClickListener {
+            hasVisitedStep2 = true
+            updateStepStatusUi()
+            XiaomiPermissionHelper.openBatterySettings(this)
+        }
+
+        // 步骤3：权限管理与自启动（点击不关闭弹窗）
+        btnStep3.setOnClickListener {
+            hasVisitedStep3 = true
+            updateStepStatusUi()
+            XiaomiPermissionHelper.openPermissionsSettings(this)
+        }
+
+        // 唯一点确定才关闭弹窗
+        btnDone.setOnClickListener {
+            dialog.dismiss()
+            hyperOsGuideDialog = null
+        }
+
+        dialog.setOnDismissListener {
+            hyperOsGuideDialog = null
+        }
+
+        hyperOsGuideDialog = dialog
+        dialog.show()
     }
 
     private fun checkBatteryOptimization() {

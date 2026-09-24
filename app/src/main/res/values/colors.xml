@@ -1,45 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 流动香槟流光金核心品牌色系 -->
-    <color name="gold_primary">#D4AF37</color>
-    <color name="gold_primary_dark">#B89038</color>
-    <color name="gold_accent">#F3BA2F</color>
-    <color name="gold_light_tint">#FDFBF7</color>
-    <color name="gold_chart_fill_start">#33D4AF37</color>
-    <color name="gold_chart_fill_end">#00D4AF37</color>
+    <!-- 极简冷色调金融科技核心品牌色系 (蓝、绿、黑、白、灰，彻底去除黄色) -->
+    <color name="gold_primary">#2563EB</color>
+    <color name="gold_primary_dark">#1D4ED8</color>
+    <color name="gold_accent">#059669</color>
+    <color name="gold_light_tint">#F8FAFC</color>
+    <color name="gold_chart_fill_start">#262563EB</color>
+    <color name="gold_chart_fill_end">#002563EB</color>
 
-    <!-- 液态流体背景与毛玻璃色系 -->
-    <color name="bg_gradient_start">#F1F5F9</color>
+    <!-- 冷灰流体背景与极简微透玻璃卡片色系 -->
+    <color name="bg_gradient_start">#F8FAFC</color>
     <color name="bg_gradient_end">#E2E8F0</color>
-    <color name="gold_bg_light">#F1F5F9</color>
-    <color name="card_background">#F2FFFFFF</color>
-    <color name="card_background_subtle">#E6FFFFFF</color>
-    <color name="card_stroke">#80FFFFFF</color>
-    <color name="card_stroke_focused">#D4AF37</color>
+    <color name="gold_bg_light">#F8FAFC</color>
+    <color name="card_background">#F8FFFFFF</color>
+    <color name="card_background_subtle">#F1F5F9</color>
+    <color name="card_stroke">#33CBD5E1</color>
+    <color name="card_stroke_focused">#2563EB</color>
 
-    <!-- 文本色系 (深空石墨黑) -->
-    <color name="text_primary">#111827</color>
-    <color name="text_secondary">#4B5563</color>
-    <color name="text_muted">#9CA3AF</color>
+    <!-- 文本色系 (钛金冷灰与黑白) -->
+    <color name="text_primary">#0F172A</color>
+    <color name="text_secondary">#475569</color>
+    <color name="text_muted">#94A3B8</color>
     <color name="white">#FFFFFF</color>
 
-    <!-- 状态指示胶囊色系 (微透玻璃质感) -->
+    <!-- 状态指示胶囊色系 (微透冷绿、冷红、冷灰) -->
     <color name="status_green">#059669</color>
-    <color name="status_green_bg">#2010B981</color>
-    <color name="status_green_stroke">#4010B981</color>
+    <color name="status_green_bg">#1810B981</color>
+    <color name="status_green_stroke">#3510B981</color>
     <color name="status_red">#DC2626</color>
-    <color name="status_red_bg">#20EF4444</color>
-    <color name="status_red_stroke">#40EF4444</color>
-    <color name="status_gray">#4B5563</color>
-    <color name="status_gray_bg">#209CA3AF</color>
-    <color name="status_gray_stroke">#409CA3AF</color>
+    <color name="status_red_bg">#18EF4444</color>
+    <color name="status_red_stroke">#35EF4444</color>
+    <color name="status_gray">#475569</color>
+    <color name="status_gray_bg">#1864748B</color>
+    <color name="status_gray_stroke">#3564748B</color>
 
-    <!-- 液态玻璃胶囊按钮与操作色 -->
-    <color name="glass_pill_bg">#14D4AF37</color>
-    <color name="glass_pill_stroke">#33D4AF37</color>
+    <!-- 现代科技冷蓝胶囊按钮与操作色 -->
+    <color name="glass_pill_bg">#102563EB</color>
+    <color name="glass_pill_stroke">#252563EB</color>
 
-    <!-- AI 专属科技质感深空黑与渐变 -->
-    <color name="ai_btn_bg">#111827</color>
-    <color name="ai_btn_pressed">#030712</color>
-    <color name="ai_gold_accent">#F3BA2F</color>
+    <!-- AI 专属科技质感深空黑与冰蓝渐变 -->
+    <color name="ai_btn_bg">#0F172A</color>
+    <color name="ai_btn_pressed">#020617</color>
+    <color name="ai_gold_accent">#38BDF8</color>
+
+    <!-- 辅助冷色板 -->
+    <color name="cool_blue_subtle">#EFF6FF</color>
+    <color name="cool_green_subtle">#ECFDF5</color>
 </resources>
