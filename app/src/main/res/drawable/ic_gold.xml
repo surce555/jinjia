@@ -15,51 +15,59 @@
       android:strokeWidth="1.5"
       android:pathData="M 30,6 L 78,6 C 94,6 102,14 102,30 L 102,78 C 102,94 94,102 78,102 L 30,102 C 14,102 6,94 6,78 L 6,30 C 6,14 14,6 30,6 Z" />
 
-  <!-- 3. 背景极细冷灰参考网格 -->
+  <!-- 3. 背景极细冷灰参考网格线 -->
   <path
       android:strokeColor="#1E293B"
       android:strokeWidth="1"
-      android:pathData="M 18,72 L 90,72 M 18,50 L 90,50 M 18,28 L 90,28" />
+      android:pathData="M 18,72 L 90,72" />
+  <path
+      android:strokeColor="#1E293B"
+      android:strokeWidth="1"
+      android:pathData="M 18,50 L 90,50" />
+  <path
+      android:strokeColor="#1E293B"
+      android:strokeWidth="1"
+      android:pathData="M 18,28 L 90,28" />
 
-  <!-- 4. 走势图半透明冰蓝微光投影区 -->
+  <!-- 4. 走势图半透明冰蓝微光投影区 (Cubic Bezier) -->
   <path
       android:fillColor="#1538BDF8"
-      android:pathData="M 20,76 L 20,72 Q 34,68 46,62 T 68,54 T 88,32 L 88,76 Z" />
+      android:pathData="M 20,76 L 20,72 C 32,70 38,64 46,58 C 54,52 60,48 68,42 C 76,36 80,32 88,30 L 88,76 Z" />
 
-  <!-- 5. 极简翡翠绿量化阳线 (Emerald Candlestick) -->
+  <!-- 5. 极简翡翠绿量化阳线 (Emerald Candlestick 1) -->
   <path
       android:strokeColor="#10B981"
       android:strokeWidth="1.5"
-      android:strokeCap="round"
+      android:strokeLineCap="round"
       android:pathData="M 46,40 L 46,74" />
   <path
       android:fillColor="#10B981"
-      android:pathData="M 42,48 L 50,48 A 1.5,1.5 0 0 1 51.5,49.5 L 51.5,65 A 1.5,1.5 0 0 1 50,66.5 L 42,66.5 A 1.5,1.5 0 0 1 40.5,65 L 40.5,49.5 A 1.5,1.5 0 0 1 42,48 Z" />
+      android:pathData="M 42,48 L 50,48 C 51,48 51.5,48.5 51.5,49.5 L 51.5,65 C 51.5,66 51,66.5 50,66.5 L 42,66.5 C 41,66.5 40.5,66 40.5,65 L 40.5,49.5 C 40.5,48.5 41,48 42,48 Z" />
 
-  <!-- 6. 极简翡翠绿第二根量化阳线 -->
+  <!-- 6. 极简翡翠绿第二根量化阳线 (Emerald Candlestick 2) -->
   <path
       android:strokeColor="#10B981"
       android:strokeWidth="1.5"
-      android:strokeCap="round"
+      android:strokeLineCap="round"
       android:pathData="M 68,30 L 68,64" />
   <path
       android:fillColor="#10B981"
-      android:pathData="M 64,36 L 72,36 A 1.5,1.5 0 0 1 73.5,37.5 L 73.5,52 A 1.5,1.5 0 0 1 72,53.5 L 64,53.5 A 1.5,1.5 0 0 1 62.5,52 L 62.5,37.5 A 1.5,1.5 0 0 1 64,36 Z" />
+      android:pathData="M 64,36 L 72,36 C 73,36 73.5,36.5 73.5,37.5 L 73.5,52 C 73.5,53 73,53.5 72,53.5 L 64,53.5 C 63,53.5 62.5,53 62.5,52 L 62.5,37.5 C 62.5,36.5 63,36 64,36 Z" />
 
   <!-- 7. 科技电光蓝主走势平滑曲线 (Cyan/Blue Trend Curve) -->
   <path
       android:strokeColor="#38BDF8"
       android:strokeWidth="3.5"
-      android:strokeCap="round"
-      android:strokeJoin="round"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"
       android:pathData="M 20,72 C 32,70 38,64 46,58 C 54,52 60,48 68,42 C 76,36 80,32 88,30" />
 
   <!-- 8. 最新价高亮脉冲光圈 (纯白实心 + 冰蓝半透光晕) -->
   <path
       android:fillColor="#3338BDF8"
-      android:pathData="M 88,30 m -7,0 a 7,7 0 1,0 14,0 a 7,7 0 1,0 -14,0" />
+      android:pathData="M 88,23 A 7,7 0 1,1 87.99,23 Z" />
   <path
       android:fillColor="#FFFFFF"
-      android:pathData="M 88,30 m -3.2,0 a 3.2,3.2 0 1,0 6.4,0 a 3.2,3.2 0 1,0 -6.4,0" />
+      android:pathData="M 88,26.8 A 3.2,3.2 0 1,1 87.99,26.8 Z" />
 
 </vector>
