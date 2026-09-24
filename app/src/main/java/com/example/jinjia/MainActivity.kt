@@ -89,6 +89,12 @@ class MainActivity : AppCompatActivity() {
             binding = ActivityMainBinding.inflate(layoutInflater)
             setContentView(binding.root)
 
+            // 支持锁屏展示与亮屏
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+            }
+
             // 1. 初始化预置标的数据（杜绝任何空白状态，首项必为工商银行实时行情）
             allTargetsList.clear()
             allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
@@ -819,7 +825,13 @@ ${sbPoints.toString().trimEnd()}
             }
 
             ContextCompat.startForegroundService(this, intent)
-            Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】高频监控", Toast.LENGTH_SHORT).show()
+            if (threshold == GoldPriceService.THRESHOLD_TEST_30S) {
+                Toast.makeText(this, "【测试模式已启动】将在 30 秒后推送锁屏测试通知，请立即熄屏测试！", Toast.LENGTH_LONG).show()
+            } else if (threshold == GoldPriceService.THRESHOLD_TEST_5M) {
+                Toast.makeText(this, "【测试模式已启动】将在 5 分钟后推送锁屏测试通知，请熄屏测试！", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】高频监控", Toast.LENGTH_SHORT).show()
+            }
         } catch (t: Throwable) {
             Log.e("MainActivity", "startMonitoring failed: ${t.message}", t)
             // 全量防崩溃：启动异常时自动重置运行状态，绝不导致死循环闪退
@@ -894,7 +906,13 @@ ${sbPoints.toString().trimEnd()}
         // 4. 设定阈值与刷新频率 (前台1分钟，后台固定5分钟)
         if (state.targetThreshold != null && state.targetThreshold > 0) {
             val symbol = if (state.targetTitle.contains("伦敦金") || state.targetId == "realtime_gj") "$" else "¥"
-            binding.tvCurrentThreshold.text = "$symbol %.2f".format(state.targetThreshold)
+            if (state.targetThreshold == GoldPriceService.THRESHOLD_TEST_30S) {
+                binding.tvCurrentThreshold.text = "测试(30秒)"
+            } else if (state.targetThreshold == GoldPriceService.THRESHOLD_TEST_5M) {
+                binding.tvCurrentThreshold.text = "测试(5分钟)"
+            } else {
+                binding.tvCurrentThreshold.text = "$symbol %.2f".format(state.targetThreshold)
+            }
             if (binding.etThreshold.text.isNullOrBlank()) {
                 binding.etThreshold.setText("%.2f".format(state.targetThreshold))
             }

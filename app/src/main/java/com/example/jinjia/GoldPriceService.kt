@@ -9,6 +9,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.graphics.Color
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -32,10 +35,7 @@ import java.util.Locale
 
 /**
  * 金价后台轮询与多品类精准监控服务
- * 支持双数据源定向高频轮询：
- * - 实时机构标的：直接请求单个轻量高频 API（毫秒级、无视限频）
- * - 大盘金店标的：请求日更综合行情 API
- * 全量防崩溃兜底，使用安全 AlarmManager.setAndAllowWhileIdle 与协程循环双重保活
+ * 支持双数据源定向高频轮询与 Doze 休眠准时唤醒，提供锁屏通知穿透与测试模式
  */
 class GoldPriceService : Service() {
 
@@ -59,20 +59,27 @@ class GoldPriceService : Service() {
         const val ACTION_STOP = "com.example.jinjia.ACTION_STOP"
         const val ACTION_ENTER_FOREGROUND = "com.example.jinjia.ACTION_ENTER_FOREGROUND"
         const val ACTION_ENTER_BACKGROUND = "com.example.jinjia.ACTION_ENTER_BACKGROUND"
+        const val ACTION_TEST_NOTIFICATION = "com.example.jinjia.ACTION_TEST_NOTIFICATION"
 
         const val BACKGROUND_INTERVAL_MS = 5 * 60 * 1000L // 后台休眠固定 5 分钟 (300,000ms)
         const val FOREGROUND_INTERVAL_MS = 60 * 1000L      // 前台活跃固定 1 分钟 (60,000ms)
+
+        // 隐藏测试阈值常数
+        const val THRESHOLD_TEST_30S = 10030.0
+        const val THRESHOLD_TEST_5M = 10300.0
 
         const val EXTRA_TARGET_ID = "extra_target_id"
         const val EXTRA_TARGET_NAME = "extra_target_name"
         const val EXTRA_THRESHOLD = "extra_threshold"
         const val EXTRA_INTERVAL_MINUTES = "extra_interval_minutes"
+        const val EXTRA_TEST_MODE = "extra_test_mode"
 
         const val CHANNEL_MONITOR_ID = "gold_monitor_channel"
-        const val CHANNEL_ALERT_ID = "gold_alert_channel"
+        const val CHANNEL_ALERT_ID = "gold_alert_channel_v2" // v2 确保带声音振动与锁屏最高可见性
 
         const val NOTIFICATION_MONITOR_ID = 1001
         const val NOTIFICATION_ALERT_ID = 2001
+        const val NOTIFICATION_TEST_ID = 3001
 
         // 数据持久化常量
         const val PREFS_NAME = "gold_price_prefs"
@@ -128,6 +135,7 @@ class GoldPriceService : Service() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var pollJob: Job? = null
+    private var testJob: Job? = null
 
     private val notificationManager by lazy {
         getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -148,6 +156,7 @@ class GoldPriceService : Service() {
     private var intervalMinutes: Double = 5.0
     private var hasAlerted: Boolean = false
     private var isAppInForeground: Boolean = false
+    private var alertCounter: Int = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -209,9 +218,18 @@ class GoldPriceService : Service() {
                                 fetchPriceAndEvaluate()
                             } catch (t: Throwable) {
                                 Log.e(TAG, "ACTION_POLL error: ${t.message}", t)
+                            } finally {
+                                // 核心修复：后台每次闹钟拉取完毕后，必须无缝预定下一次闹钟，杜绝深睡断链
+                                if (_monitorState.value.isRunning) {
+                                    scheduleSafeAlarm()
+                                }
                             }
                         }
                     }
+                }
+                ACTION_TEST_NOTIFICATION -> {
+                    val mode = intent.getStringExtra(EXTRA_TEST_MODE) ?: "30秒"
+                    sendTestNotification(mode)
                 }
                 ACTION_STOP -> {
                     stopMonitorService()
@@ -219,7 +237,6 @@ class GoldPriceService : Service() {
             }
         } catch (t: Throwable) {
             Log.e(TAG, "Exception in onStartCommand: ${t.message}", t)
-            // 异常时重置 SharedPreferences 中的运行状态，彻底打破死循环闪退
             resetRunningStateOnFailure()
         }
         return START_STICKY
@@ -257,7 +274,14 @@ class GoldPriceService : Service() {
         _monitorState.value = updatedState
         saveStateToPrefs(updatedState, null)
 
-        // 启动安全协程循环轮询，辅以安全闹钟唤醒
+        // 隐藏测试功能：输入 10030 触发 30 秒测试，输入 10300 触发 5 分钟测试
+        if (targetThreshold == THRESHOLD_TEST_30S) {
+            scheduleTestAlarm("30秒", 30_000L)
+        } else if (targetThreshold == THRESHOLD_TEST_5M) {
+            scheduleTestAlarm("5分钟", 300_000L)
+        }
+
+        // 启动安全协程循环轮询，辅以精准闹钟唤醒
         pollJob?.cancel()
         pollJob = serviceScope.launch {
             while (isActive) {
@@ -267,7 +291,6 @@ class GoldPriceService : Service() {
                     Log.e(TAG, "Coroutine loop error: ${t.message}", t)
                 }
                 scheduleSafeAlarm()
-                // 自适应轮询间隔：前台1分钟，后台固定5分钟 (300,000ms)
                 val delayMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
                 delay(delayMs)
             }
@@ -276,7 +299,9 @@ class GoldPriceService : Service() {
 
     private fun stopMonitorService() {
         cancelAlarm()
+        cancelTestAlarm()
         pollJob?.cancel()
+        testJob?.cancel()
 
         val stoppedState = _monitorState.value.copy(
             isRunning = false,
@@ -296,31 +321,133 @@ class GoldPriceService : Service() {
     }
 
     /**
-     * 使用无需特殊权限的安全闹钟 setAndAllowWhileIdle，杜绝 SecurityException 闪退
+     * 针对锁屏测试模式的闹钟与协程双通道准时推送调度
+     */
+    private fun scheduleTestAlarm(modeDesc: String, delayMs: Long) {
+        cancelTestAlarm()
+        testJob?.cancel()
+
+        // 1. AlarmManager 定时精准唤醒
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = ACTION_TEST_NOTIFICATION
+                putExtra(EXTRA_TEST_MODE, modeDesc)
+            }
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(this, 1003, intent, flags)
+            } else {
+                PendingIntent.getService(this, 1003, intent, flags)
+            }
+
+            val triggerAt = SystemClock.elapsedRealtime() + delayMs
+            scheduleExactOrAllowWhileIdle(triggerAt, pendingIntent)
+            Log.i(TAG, "Test notification alarm scheduled after $delayMs ms ($modeDesc)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "scheduleTestAlarm error: ${t.message}")
+        }
+
+        // 2. 协程并发双保险（在设备亮屏未休眠时准时推送）
+        testJob = serviceScope.launch {
+            delay(delayMs)
+            sendTestNotification(modeDesc)
+        }
+    }
+
+    private fun cancelTestAlarm() {
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = ACTION_TEST_NOTIFICATION
+            }
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(this, 1003, intent, flags)
+            } else {
+                PendingIntent.getService(this, 1003, intent, flags)
+            }
+            alarmManager.cancel(pendingIntent)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * 发送隐藏测试通知（用于验证手机锁屏/休眠状态下的亮屏与通知送达）
+     */
+    private fun sendTestNotification(modeDesc: String) {
+        wakeUpScreen()
+        val pendingIntent = createContentPendingIntent()
+
+        val testNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
+            .setSmallIcon(R.drawable.ic_gold)
+            .setContentTitle("【金价盯盘】锁屏测试通知到达！")
+            .setContentText("触发模式: $modeDesc 延迟推送。手机锁屏与后台休眠唤醒测试成功！")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！")
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setFullScreenIntent(pendingIntent, true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_TEST_ID, testNotification)
+        Log.i(TAG, "Test notification dispatched ($modeDesc)")
+    }
+
+    /**
+     * 适配 Android 6+ 至 14+ 的精准闹钟调度
      */
     private fun scheduleSafeAlarm() {
         try {
-            // 前台活跃 1 分钟，后台常驻固定 5 分钟 (300,000ms) 防 Doze 唤醒
             val intervalMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
             val triggerAtMillis = SystemClock.elapsedRealtime() + intervalMs
             val pendingIntent = getPollPendingIntent()
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                alarmManager.setAndAllowWhileIdle(
+            scheduleExactOrAllowWhileIdle(triggerAtMillis, pendingIntent)
+            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s (foreground=$isAppInForeground)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
+        }
+    }
+
+    private fun scheduleExactOrAllowWhileIdle(triggerAtMillis: Long, pendingIntent: PendingIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(
                     AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
             } else {
-                alarmManager.set(
+                alarmManager.setAndAllowWhileIdle(
                     AlarmManager.ELAPSED_REALTIME_WAKEUP,
                     triggerAtMillis,
                     pendingIntent
                 )
             }
-            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s (foreground=$isAppInForeground)")
-        } catch (t: Throwable) {
-            Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            )
+        } else {
+            alarmManager.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            )
         }
     }
 
@@ -350,9 +477,6 @@ class GoldPriceService : Service() {
 
     /**
      * 核心网络拉取与指定标的预警比对
-     * 定向高频轮询策略：
-     * - 若当前标的为实时机构（以 "realtime_" 开头），只调用对应 code 轻量接口
-     * - 若当前标的为日更参考行情，调用综合接口
      */
     private suspend fun fetchPriceAndEvaluate() {
         val wakeLock = try {
@@ -399,8 +523,8 @@ class GoldPriceService : Service() {
         targetId = item.id
         targetTitle = currentTitle
 
-        // 1. 边缘触发告警状态机（低于阈值悬浮提醒 1 次）
-        if (targetThreshold > 0 && currentPrice > 0) {
+        // 1. 边缘触发告警状态机（低于阈值推送通知）
+        if (targetThreshold > 0 && currentPrice > 0 && targetThreshold != THRESHOLD_TEST_30S && targetThreshold != THRESHOLD_TEST_5M) {
             if (currentPrice < targetThreshold) {
                 if (!hasAlerted) {
                     sendAlertNotification(currentTitle, currentPrice, targetThreshold, item.unit)
@@ -462,7 +586,7 @@ class GoldPriceService : Service() {
         targetTitle = currentTitle
 
         // 1. 边缘触发告警状态机
-        if (targetThreshold > 0 && currentPrice > 0) {
+        if (targetThreshold > 0 && currentPrice > 0 && targetThreshold != THRESHOLD_TEST_30S && targetThreshold != THRESHOLD_TEST_5M) {
             if (currentPrice < targetThreshold) {
                 if (!hasAlerted) {
                     sendAlertNotification(currentTitle, currentPrice, targetThreshold, targetItem.unit)
@@ -548,7 +672,7 @@ class GoldPriceService : Service() {
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP or PowerManager.ON_AFTER_RELEASE,
                 "Jinjia:AlertScreenWakeLock"
             )
-            screenWakeLock.acquire(5_000L)
+            screenWakeLock.acquire(10_000L)
         } catch (t: Throwable) {
             Log.e(TAG, "wakeUpScreen error: ${t.message}", t)
         }
@@ -564,15 +688,22 @@ class GoldPriceService : Service() {
             .setSmallIcon(R.drawable.ic_gold)
             .setContentTitle("【$title】跌破预警阈值！")
             .setContentText("【$title】跌破阈值，当前价格为 $symbol%.2f %s（监控阈值: $symbol%.2f %s）".format(price, unit, threshold, unit))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("【$title】跌破监控阈值！\n当前最新价格: $symbol%.2f %s\n设定的预警阈值: $symbol%.2f %s\n请及时关注实盘行情变动。".format(price, unit, threshold, unit))
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setFullScreenIntent(pendingIntent, true)
             .setContentIntent(pendingIntent)
             .build()
 
-        notificationManager.notify(NOTIFICATION_ALERT_ID, alertNotification)
+        alertCounter++
+        val notificationId = NOTIFICATION_ALERT_ID + (alertCounter % 5)
+        notificationManager.notify(notificationId, alertNotification)
     }
 
     private fun updatePersistentNotification(priceText: String, detailText: String) {
@@ -619,16 +750,25 @@ class GoldPriceService : Service() {
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
 
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val audioAttributes = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             val alertChannel = NotificationChannel(
                 CHANNEL_ALERT_ID,
                 getString(R.string.notification_channel_alert_name),
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "当金价低于监控阈值时弹出高优先级横幅告警"
+                description = "当金价低于监控阈值或测试时弹出高优先级横幅告警并亮屏"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 200, 500)
+                enableLights(true)
+                lightColor = Color.YELLOW
                 setShowBadge(true)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
+                setSound(soundUri, audioAttributes)
             }
 
             notificationManager.createNotificationChannel(monitorChannel)
@@ -651,6 +791,7 @@ class GoldPriceService : Service() {
         super.onDestroy()
         try {
             cancelAlarm()
+            cancelTestAlarm()
             serviceScope.cancel()
             val stoppedState = _monitorState.value.copy(
                 isRunning = false,

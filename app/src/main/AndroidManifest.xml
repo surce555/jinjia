@@ -11,6 +11,9 @@
     <!-- 精确闹钟权限（用于后台休眠定时唤醒） -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
+    <!-- 锁屏全屏意图与亮屏权限（保障锁屏状态下唤醒屏幕与展示弹窗） -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
     <!-- 请求忽略电池优化权限（防止系统后台杀进程或掐网） -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
@@ -33,7 +36,9 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
