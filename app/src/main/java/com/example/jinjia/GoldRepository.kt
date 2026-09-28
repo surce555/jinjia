@@ -362,8 +362,9 @@ object DebugLogger {
         interval: String,
         onCachedData: ((List<ChartPoint>) -> Unit)? = null
     ): List<ChartPoint> = withContext(Dispatchers.IO) {
+        val actualInterval = if (interval == "1w") "1d" else interval
         val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://jinjia.lingchenyidianban.site"
-        val url = "$base/api/$symbol/ohlc?interval=$interval"
+        val url = "$base/api/$symbol/ohlc?interval=$actualInterval"
         DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
 
         val cacheFile = cacheDir?.let { java.io.File(it, "biquote_${symbol}_${interval}.json") }
@@ -372,7 +373,8 @@ object DebugLogger {
         if (onCachedData != null && cacheFile != null && cacheFile.exists()) {
             try {
                 val cachedString = cacheFile.readText(Charsets.UTF_8)
-                val cachedList = parseBiquoteJson(cachedString)
+                var cachedList = parseBiquoteJson(cachedString)
+                if (interval == "1w") cachedList = aggregateWeekly(cachedList)
                 if (cachedList.isNotEmpty()) {
                     DebugLogger.log("fetchBiquoteOHLC: Loaded ${cachedList.size} points from cache")
                     withContext(Dispatchers.Main) { onCachedData(cachedList) }
@@ -404,7 +406,8 @@ object DebugLogger {
                 cacheFile?.writeText(bodyString, Charsets.UTF_8)
             } catch (e: Exception) {}
             
-            val list = parseBiquoteJson(bodyString)
+            var list = parseBiquoteJson(bodyString)
+            if (interval == "1w") list = aggregateWeekly(list)
             DebugLogger.log("fetchBiquoteOHLC: SUCCESS $symbol parsed ${list.size} points")
             return@withContext list
         } catch (t: Throwable) {
@@ -414,7 +417,8 @@ object DebugLogger {
             // 如果网络失败，尝试从缓存返回最后的数据兜底（避免 UI 空白）
             if (cacheFile != null && cacheFile.exists()) {
                 try {
-                    return@withContext parseBiquoteJson(cacheFile.readText(Charsets.UTF_8))
+                    val cached = parseBiquoteJson(cacheFile.readText(Charsets.UTF_8))
+                    return@withContext if (interval == "1w") aggregateWeekly(cached) else cached
                 } catch(e: Exception){}
             }
             return@withContext emptyList()
@@ -454,6 +458,26 @@ object DebugLogger {
         }
         list.sortBy { it.timestamp }
         return list
+    }
+
+    private fun aggregateWeekly(dailyPoints: List<ChartPoint>): List<ChartPoint> {
+        if (dailyPoints.isEmpty()) return emptyList()
+        val weeklyMap = java.util.TreeMap<Long, MutableList<ChartPoint>>()
+        for (pt in dailyPoints) {
+            val days = pt.timestamp / 86400000L
+            val weekIdx = (days + 3) / 7
+            val weekStartTs = (weekIdx * 7 - 3) * 86400000L
+            weeklyMap.getOrPut(weekStartTs) { mutableListOf() }.add(pt)
+        }
+        val weeklyPoints = mutableListOf<ChartPoint>()
+        for ((ts, pts) in weeklyMap) {
+            val open = pts.first().open
+            val close = pts.last().price
+            val high = pts.maxOf { it.high }
+            val low = pts.minOf { it.low }
+            weeklyPoints.add(ChartPoint(ts, close, open, high, low, true))
+        }
+        return weeklyPoints
     }
 }
 

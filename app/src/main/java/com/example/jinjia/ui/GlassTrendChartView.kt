@@ -638,6 +638,8 @@ class GlassTrendChartView @JvmOverloads constructor(
         }
 
         
+                canvas.restoreToCount(saveCount)
+
         // Draw X-axis Labels (Compare Mode)
         val basePts = if (chartMode == 0) points else secondaryPoints
         val baseXs = if (chartMode == 0) xs1 else xs2
@@ -654,8 +656,6 @@ class GlassTrendChartView @JvmOverloads constructor(
                 canvas.drawText(txt, px.coerceIn(paddingLeft + textWidth/2, w - paddingRight - textWidth/2), h - 4f.toPx(), emptyTextPaint)
             }
         }
-        
-        canvas.restoreToCount(saveCount)
 
 
         // 3. 触摸高亮与联动 Tooltip
@@ -841,6 +841,8 @@ class GlassTrendChartView @JvmOverloads constructor(
         }
 
         
+                canvas.restoreToCount(saveCount)
+
         // Draw X-axis Labels (Single Mode)
         val lblCount = 5
         for (i in 0 until lblCount) {
@@ -853,8 +855,6 @@ class GlassTrendChartView @JvmOverloads constructor(
             val textWidth = emptyTextPaint.measureText(txt)
             canvas.drawText(txt, px.coerceIn(paddingLeft + textWidth/2, w - paddingRight - textWidth/2), h - 4f.toPx(), emptyTextPaint)
         }
-        
-        canvas.restoreToCount(saveCount)
 
 
         // 手势触摸高亮与浮动 Tooltip
