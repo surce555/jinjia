@@ -362,7 +362,7 @@ object DebugLogger {
         interval: String,
         onCachedData: ((List<ChartPoint>) -> Unit)? = null
     ): List<ChartPoint> = withContext(Dispatchers.IO) {
-        val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://jinjia.suziqi1994.workers.dev"
+        val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://jinjia.lingchenyidianban.site"
         val url = "$base/api/$symbol/ohlc?interval=$interval"
         DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
 
