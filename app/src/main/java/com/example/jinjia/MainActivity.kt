@@ -772,15 +772,11 @@ class MainActivity : AppCompatActivity() {
         val timeSdf = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
         sampled.forEach { pt ->
             val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
-            sbPoints.append("- %s: %.2f %s
-".format(timeSdf.format(java.util.Date(tMillis)), pt.price, item.unit))
+            sbPoints.append("- %s: %.2f %s\n".format(timeSdf.format(java.util.Date(tMillis)), pt.price, item.unit))
         }
         
         val extInfo = if (londonPts.isNotEmpty() && dxyPts.isNotEmpty()) {
-            "
-【外盘联动参考】
-- 伦敦金最新价：$%.2f/盎司
-- 美元指数最新价：%.2f".format(
+            "\n【外盘联动参考】\n- 伦敦金最新价：$%.2f/盎司\n- 美元指数最新价：%.2f".format(
                 londonPts.lastOrNull()?.price ?: 0.0,
                 dxyPts.lastOrNull()?.price ?: 0.0
             )
@@ -813,8 +809,7 @@ ${sbPoints.toString().trimEnd()}
         val dateSdf = java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault())
         sampled.forEach { pt ->
             val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
-            sbPoints.append("- %s: 开$%.2f 高$%.2f 低$%.2f 收$%.2f
-".format(
+            sbPoints.append("- %s: 开$%.2f 高$%.2f 低$%.2f 收$%.2f\n".format(
                 dateSdf.format(java.util.Date(tMillis)), pt.open, pt.high, pt.low, pt.price
             ))
         }
