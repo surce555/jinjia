@@ -833,78 +833,7 @@ ${sbPoints.toString().trimEnd()}
 4. 中长线布局建议：如果是现货/实物金投资者，当前是否是建仓良机？如果是杠杆交易者，应采取顺势加仓还是逢高沽空的策略？
 """.trimIndent().format(dxyPts.lastOrNull()?.price ?: 0.0)
     }
-    /**
-     * 统一抽取：为任意标的复制专业 AI 量化分析 Prompt
-     */
-    private fun copyAiAnalysisPromptForItem(item: GoldItem, preloadedPoints: List<ChartPoint>?) {
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                // 1. 获取日内走势分时数据
-                val chartPoints = if (!preloadedPoints.isNullOrEmpty()) {
-                    preloadedPoints
-                } else {
-                    GoldRepository.fetchIntradayChart(item.id)
-                }
-                val sampledPoints = sampleChartPoints(chartPoints, targetCount = 36)
 
-                val highPrice = if (chartPoints.isNotEmpty()) chartPoints.maxOf { it.price } else item.price
-                val lowPrice = if (chartPoints.isNotEmpty()) chartPoints.minOf { it.price } else item.price
-                val latestPrice = if (chartPoints.isNotEmpty()) chartPoints.last().price else item.price
-                val amplitude = if (lowPrice > 0) ((highPrice - lowPrice) / lowPrice * 100.0) else 0.0
-
-                val timeSdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-                val dateSdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                val currentTime = dateSdf.format(Date())
-
-                // 2. 组装分时抽样数据清单 (时间 -> 价格)
-                val sbPoints = StringBuilder()
-                if (sampledPoints.isNotEmpty()) {
-                    sampledPoints.forEach { pt ->
-                        val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
-                        val timeStr = timeSdf.format(Date(tMillis))
-                        sbPoints.append("- %s: %.2f %s\n".format(timeStr, pt.price, item.unit))
-                    }
-                } else {
-                    sbPoints.append("- 当前即时报价: %.2f %s\n".format(item.price, item.unit))
-                }
-
-                // 3. 构造专业量化专家提示词
-                val prompt = """
-你是一名拥有15年经验的贵金属量化交易专家。请根据以下我刚从实盘抓取的【${item.displayName}】今日高频分时走势数据，进行专业技术面剖析与行情预测：
-
-【盘口概况】
-- 标的名称：${item.displayName}
-- 当前最新价：%.2f %s
-- 日内最高价：%.2f %s
-- 日内最低价：%.2f %s
-- 日内振幅：%.2f%%
-- 数据更新时间：$currentTime
-
-【日内分时抽样数据 (时间 -> 价格)】
-${sbPoints.toString().trimEnd()}
-
-【请从以下 4 个维度给出深度分析报告】：
-1. 短期均线与动量：当前处于拉升、阴跌还是窄幅蓄势震荡？
-2. 关键点位研判：测算日内关键的支撑位（买点）与阻力位（压力位）。
-3. 盘口多空情绪与风险评估：是否存在诱多/诱空或加速见顶信号？
-4. 具体实操策略建议：给出明确的激进/稳健做单点位、止损防守位与止盈目标。
-                """.trimIndent().format(latestPrice, item.unit, highPrice, item.unit, lowPrice, item.unit, amplitude)
-
-                withContext(Dispatchers.Main) {
-                    val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    val clip = ClipData.newPlainText("Gold AI Analysis Prompt", prompt)
-                    clipboard.setPrimaryClip(clip)
-
-                    Toast.makeText(this@MainActivity, "已生成【${item.displayName}】专业AI量化分析提示词，可直接去对话框粘贴！", Toast.LENGTH_LONG).show()
-                }
-            } catch (t: Throwable) {
-                Log.e("MainActivity", "copyAiAnalysisPromptForItem error: ${t.message}", t)
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "走势拉取提示: ${t.message}", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
 
     /**
      * 对高频走势点进行均匀抽样（提取 30~50 个关键点，保留开盘、收盘、全天极值）
