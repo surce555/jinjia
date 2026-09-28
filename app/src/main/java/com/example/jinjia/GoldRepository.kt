@@ -355,9 +355,15 @@ object GoldRepository {
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) return@withContext emptyList()
             
-            val bodyString = response.body?.string() ?: return@withContext emptyList()
-            val root = JSONObject(bodyString)
-            val dataArray = root.optJSONArray("data") ?: return@withContext emptyList()
+            val bodyString = response.body?.string()?.trim() ?: return@withContext emptyList()
+            var dataArray: JSONArray? = null
+            if (bodyString.startsWith("[")) {
+                dataArray = JSONArray(bodyString)
+            } else {
+                val root = JSONObject(bodyString)
+                dataArray = root.optJSONArray("bars") ?: root.optJSONArray("data")
+            }
+            if (dataArray == null) return@withContext emptyList()
             
             val list = mutableListOf<ChartPoint>()
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
