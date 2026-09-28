@@ -496,6 +496,18 @@ class MainActivity : AppCompatActivity() {
         binding.btnHyperOsGuide.setOnClickListener {
             showHyperOsGuideDialog()
         }
+
+        // 主看板走势图缩放监听与一键还原按钮联动
+        binding.chartMainDashboard.onZoomChangeListener = { isZoomed, scale ->
+            binding.btnResetChartZoom.visibility = if (isZoomed) View.VISIBLE else View.GONE
+            if (isZoomed) {
+                binding.btnResetChartZoom.text = "↺ 还原 (%.1fx)".format(scale)
+            }
+        }
+
+        binding.btnResetChartZoom.setOnClickListener {
+            binding.chartMainDashboard.resetZoom()
+        }
     }
 
     /**
