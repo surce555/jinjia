@@ -170,6 +170,37 @@
             android:textColor="@color/text_primary"
             android:textSize="14sp" />
 
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="12dp"
+            android:background="#EEEEEE" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="🌐 Biquote API 代理 (选填)"
+            android:textColor="@color/gold_primary_dark"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+            
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="若走势数据采集中且日志显示超时，可填入你部署的 Cloudflare Worker 代理地址。"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp" />
+
+        <EditText
+            android:id="@+id/etProxyUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:hint="例如: https://proxy.workers.dev"
+            android:inputType="textUri"
+            android:textSize="14sp" />
+
         <!-- 底部操作按钮 -->
         <LinearLayout
             android:layout_width="match_parent"

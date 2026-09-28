@@ -99,6 +99,9 @@ class MainActivity : AppCompatActivity() {
             // 1. 初始化预置标的数据（杜绝任何空白状态，首项必为工商银行实时行情）
             allTargetsList.clear()
             allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
+            
+            val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+            GoldRepository.proxyUrl = sp.getString("biquote_proxy", "")
 
             initRecyclerView()
             initIntervalSpinner()
@@ -246,8 +249,8 @@ class MainActivity : AppCompatActivity() {
 
         val timeframeStr = when (tabIndex) {
             1 -> "1d"
-            2 -> "1wk"
-            3 -> "1mo"
+            2 -> "1w"
+            3 -> "1M"
             else -> "5m"
         }
 
@@ -259,7 +262,7 @@ class MainActivity : AppCompatActivity() {
                 if (isRealtime) {
                     val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
                     val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
-                    val dxyJob = async { GoldRepository.fetchYahooOHLC("DX-Y.NYB", "5m") }
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") }
                     
                     val targetPoints = targetJob.await()
                     val londonPoints = londonJob.await()
@@ -283,8 +286,8 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 } else {
-                    val londonJob = async { GoldRepository.fetchYahooOHLC("GC=F", timeframeStr) }
-                    val dxyJob = async { GoldRepository.fetchYahooOHLC("DX-Y.NYB", timeframeStr) }
+                    val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) }
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) }
                     
                     val londonPoints = londonJob.await()
                     val dxyPoints = dxyJob.await()
@@ -719,19 +722,19 @@ class MainActivity : AppCompatActivity() {
                 val isRealtime = tabIndex == 0
                 val timeframeStr = when (tabIndex) {
                     1 -> "1d"
-                    2 -> "1wk"
-                    3 -> "1mo"
+                    2 -> "1w"
+                    3 -> "1M"
                     else -> "5m"
                 }
                 
                 val promptText = if (isRealtime) {
                     val targetPts = if (!mainDashboardChartPoints.isNullOrEmpty()) mainDashboardChartPoints!! else GoldRepository.fetchIntradayChart(item.id)
                     val londonPts = if (!mainDashboardLondonPoints.isNullOrEmpty()) mainDashboardLondonPoints!! else GoldRepository.fetchIntradayChart("realtime_gj")
-                    val dxyPts = GoldRepository.fetchYahooOHLC("DX-Y.NYB", "5m")
+                    val dxyPts = GoldRepository.fetchBiquoteOHLC("DXY", "5m")
                     buildRealtimeAiPrompt(item, targetPts, londonPts, dxyPts)
                 } else {
-                    val londonPts = GoldRepository.fetchYahooOHLC("GC=F", timeframeStr)
-                    val dxyPts = GoldRepository.fetchYahooOHLC("DX-Y.NYB", timeframeStr)
+                    val londonPts = GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr)
+                    val dxyPts = GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr)
                     val tfLabel = when(tabIndex) { 1->"日K线"; 2->"周K线"; 3->"月K线"; else->"K线" }
                     buildKLineAiPrompt(tfLabel, londonPts, dxyPts)
                 }
@@ -886,6 +889,10 @@ ${sbPoints.toString().trimEnd()}
         dialogBinding.cbCatMetals.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_METALS}", true)
         dialogBinding.cbCatRecycle.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", true)
 
+        // 初始化代理地址
+        val currentProxy = sp.getString("biquote_proxy", "")
+        dialogBinding.etProxyUrl.setText(currentProxy)
+
         // 全选 / 反选机构快捷按钮
         val bankCheckBoxes = listOf(
             dialogBinding.cbBankIcbc,
@@ -908,6 +915,7 @@ ${sbPoints.toString().trimEnd()}
 
         // 保存并应用按钮
         dialogBinding.btnDialogSave.setOnClickListener {
+            val newProxy = dialogBinding.etProxyUrl.text.toString().trim()
             sp.edit()
                 // 保存银行开关
                 .putBoolean("bank_enabled_icbc", dialogBinding.cbBankIcbc.isChecked)
@@ -923,8 +931,10 @@ ${sbPoints.toString().trimEnd()}
                 .putBoolean("show_cat_${GoldDataParser.CAT_STORES}", dialogBinding.cbCatStores.isChecked)
                 .putBoolean("show_cat_${GoldDataParser.CAT_METALS}", dialogBinding.cbCatMetals.isChecked)
                 .putBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", dialogBinding.cbCatRecycle.isChecked)
+                .putString("biquote_proxy", newProxy)
                 .apply()
 
+            GoldRepository.proxyUrl = newProxy
             dialog.dismiss()
 
             // 即时刷新 UI

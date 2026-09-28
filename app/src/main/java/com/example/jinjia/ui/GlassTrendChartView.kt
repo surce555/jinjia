@@ -637,7 +637,26 @@ class GlassTrendChartView @JvmOverloads constructor(
             }
         }
 
+        
+        // Draw X-axis Labels (Compare Mode)
+        val basePts = if (chartMode == 0) points else secondaryPoints
+        val baseXs = if (chartMode == 0) xs1 else xs2
+        if (basePts.isNotEmpty() && baseXs != null) {
+            val lblCount = 5
+            for (i in 0 until lblCount) {
+                val idx = (i * (basePts.size - 1)) / (lblCount - 1)
+                val pt = basePts[idx]
+                val px = baseXs[idx]
+                val fmt = if (chartMode == 1) java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()) else timeFormat
+                val txt = fmt.format(java.util.Date(pt.timestamp * if (pt.timestamp < 100_000_000_000L) 1000L else 1L))
+                emptyTextPaint.textSize = 10f.toPx()
+                val textWidth = emptyTextPaint.measureText(txt)
+                canvas.drawText(txt, px.coerceIn(paddingLeft + textWidth/2, w - paddingRight - textWidth/2), h - 4f.toPx(), emptyTextPaint)
+            }
+        }
+        
         canvas.restoreToCount(saveCount)
+
 
         // 3. 触摸高亮与联动 Tooltip
         if (isTouching) {
@@ -821,7 +840,22 @@ class GlassTrendChartView @JvmOverloads constructor(
             canvas.drawCircle(xs[lastIdx], ys[lastIdx], 3.2f.toPx(), dotPrimaryPaint)
         }
 
+        
+        // Draw X-axis Labels (Single Mode)
+        val lblCount = 5
+        for (i in 0 until lblCount) {
+            val idx = (i * (points.size - 1)) / (lblCount - 1)
+            val pt = points[idx]
+            val px = xs[idx]
+            val fmt = if (chartMode == 1) java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()) else timeFormat
+            val txt = fmt.format(java.util.Date(pt.timestamp * if (pt.timestamp < 100_000_000_000L) 1000L else 1L))
+            emptyTextPaint.textSize = 10f.toPx()
+            val textWidth = emptyTextPaint.measureText(txt)
+            canvas.drawText(txt, px.coerceIn(paddingLeft + textWidth/2, w - paddingRight - textWidth/2), h - 4f.toPx(), emptyTextPaint)
+        }
+        
         canvas.restoreToCount(saveCount)
+
 
         // 手势触摸高亮与浮动 Tooltip
         if (isTouching && selectedPointIndex in 0 until count) {
@@ -936,7 +970,8 @@ class GlassTrendChartView @JvmOverloads constructor(
         containerHeight: Float
     ) {
         val tMillis = if (point.timestamp < 100_000_000_000L) point.timestamp * 1000L else point.timestamp
-        val timeStr = timeFormat.format(Date(tMillis))
+        val fmt = if (chartMode == 1) java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()) else timeFormat
+        val timeStr = fmt.format(Date(tMillis))
         val symbol = if (priceUnit.contains("美元") || priceUnit.contains("$")) "$" else "¥"
         val priceStr = "$symbol %.2f %s".format(point.price, priceUnit)
 
@@ -983,7 +1018,8 @@ class GlassTrendChartView @JvmOverloads constructor(
         containerWidth: Float, containerHeight: Float
     ) {
         val tMillis = if (p1.timestamp < 100_000_000_000L) p1.timestamp * 1000L else p1.timestamp
-        val timeStr = timeFormat.format(java.util.Date(tMillis))
+        val fmt = if (chartMode == 1) java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()) else timeFormat
+        val timeStr = fmt.format(java.util.Date(tMillis))
         
         val p1Str = if (chartMode == 0) "● %s: ¥%.2f %s".format(primaryTitle, p1.price, priceUnit) else "● %s: $%.2f".format(secondaryTitle, p1.price)
         val p2Str = if (chartMode == 0 && p2 != null) "● %s: $%.2f %s".format(secondaryTitle, p2.price, secondaryPriceUnit) else ""

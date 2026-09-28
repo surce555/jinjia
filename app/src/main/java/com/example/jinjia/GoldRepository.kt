@@ -354,9 +354,12 @@ object DebugLogger {
     fun getLogText(): String = logs.joinToString("\n")
 }
 
-    suspend fun fetchYahooOHLC(symbol: String, interval: String): List<ChartPoint> = withContext(Dispatchers.IO) {
-        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$symbol?interval=$interval&range=5y"
-        DebugLogger.log("fetchYahooOHLC: START $symbol $interval")
+    var proxyUrl: String? = null
+
+    suspend fun fetchBiquoteOHLC(symbol: String, interval: String): List<ChartPoint> = withContext(Dispatchers.IO) {
+        val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://biquote.io"
+        val url = "$base/api/$symbol/ohlc?interval=$interval"
+        DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
         try {
             val request = Request.Builder()
                 .url(url)
@@ -366,47 +369,51 @@ object DebugLogger {
 
             val response = okHttpClient.newCall(request).execute()
             if (!response.isSuccessful) {
-                DebugLogger.log("fetchYahooOHLC: HTTP ERROR ${response.code}")
+                DebugLogger.log("fetchBiquoteOHLC: HTTP ERROR ${response.code}")
                 return@withContext emptyList()
             }
             
             val bodyString = response.body?.string()?.trim() ?: ""
+            DebugLogger.log("fetchBiquoteOHLC: body len ${bodyString.length}")
             if (bodyString.isEmpty()) return@withContext emptyList()
             
-            val root = JSONObject(bodyString)
-            val resultArr = root.optJSONObject("chart")?.optJSONArray("result")
-            val resultObj = resultArr?.optJSONObject(0)
-            if (resultObj == null) {
-                DebugLogger.log("fetchYahooOHLC: parsed resultObj is NULL")
+            var dataArray: JSONArray? = null
+            if (bodyString.startsWith("[")) {
+                dataArray = JSONArray(bodyString)
+            } else {
+                val root = JSONObject(bodyString)
+                dataArray = root.optJSONArray("bars") ?: root.optJSONArray("data")
+                if (dataArray == null) {
+                    DebugLogger.log("fetchBiquoteOHLC: No bars/data array in object! Keys: ${root.keys().asSequence().toList()}")
+                }
+            }
+            if (dataArray == null) {
+                DebugLogger.log("fetchBiquoteOHLC: parsed dataArray is NULL")
                 return@withContext emptyList()
             }
             
-            val timestamps = resultObj.optJSONArray("timestamp") ?: return@withContext emptyList()
-            val quoteObj = resultObj.optJSONObject("indicators")?.optJSONArray("quote")?.optJSONObject(0) ?: return@withContext emptyList()
-            
-            val openArr = quoteObj.optJSONArray("open")
-            val highArr = quoteObj.optJSONArray("high")
-            val lowArr = quoteObj.optJSONArray("low")
-            val closeArr = quoteObj.optJSONArray("close")
-            
             val list = mutableListOf<ChartPoint>()
-            for (i in 0 until timestamps.length()) {
-                val t = timestamps.optLong(i) * 1000L
-                val o = openArr?.optDouble(i, Double.NaN) ?: Double.NaN
-                val h = highArr?.optDouble(i, Double.NaN) ?: Double.NaN
-                val l = lowArr?.optDouble(i, Double.NaN) ?: Double.NaN
-                val c = closeArr?.optDouble(i, Double.NaN) ?: Double.NaN
-                
-                if (!c.isNaN() && c > 0) {
-                    list.add(ChartPoint(t, c, if(o.isNaN()) c else o, if(h.isNaN()) c else h, if(l.isNaN()) c else l, true))
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+            sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            
+            for (i in 0 until dataArray.length()) {
+                val obj = dataArray.optJSONObject(i) ?: continue
+                val tStr = obj.optString("openTime")
+                val t = try { sdf.parse(tStr)?.time ?: 0L } catch(e:Exception){0L}
+                val o = obj.optDouble("open", 0.0)
+                val h = obj.optDouble("high", 0.0)
+                val l = obj.optDouble("low", 0.0)
+                val c = obj.optDouble("close", 0.0)
+                if (t > 0 && c > 0) {
+                    list.add(ChartPoint(t, c, o, h, l, true))
                 }
             }
             list.sortBy { it.timestamp }
-            DebugLogger.log("fetchYahooOHLC: SUCCESS $symbol parsed ${list.size} points")
+            DebugLogger.log("fetchBiquoteOHLC: SUCCESS $symbol parsed ${list.size} points")
             return@withContext list
         } catch (t: Throwable) {
-            DebugLogger.log("fetchYahooOHLC EXCEPTION $symbol: ${t.message}")
-            Log.e(TAG, "fetchYahooOHLC failed for $symbol: ${t.message}", t)
+            DebugLogger.log("fetchBiquoteOHLC EXCEPTION $symbol: ${t.message}")
+            Log.e(TAG, "fetchBiquoteOHLC failed for $symbol: ${t.message}", t)
             return@withContext emptyList()
         }
     }
