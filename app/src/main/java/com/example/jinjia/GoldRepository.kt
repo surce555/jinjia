@@ -355,11 +355,33 @@ object DebugLogger {
 }
 
     var proxyUrl: String? = null
+    var cacheDir: java.io.File? = null
 
-    suspend fun fetchBiquoteOHLC(symbol: String, interval: String): List<ChartPoint> = withContext(Dispatchers.IO) {
-        val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://biquote.io"
+    suspend fun fetchBiquoteOHLC(
+        symbol: String, 
+        interval: String,
+        onCachedData: ((List<ChartPoint>) -> Unit)? = null
+    ): List<ChartPoint> = withContext(Dispatchers.IO) {
+        val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://jinjia.suziqi1994.workers.dev"
         val url = "$base/api/$symbol/ohlc?interval=$interval"
         DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
+
+        val cacheFile = cacheDir?.let { java.io.File(it, "biquote_${symbol}_${interval}.json") }
+        
+        // 尝试先读取并回调本地缓存
+        if (onCachedData != null && cacheFile != null && cacheFile.exists()) {
+            try {
+                val cachedString = cacheFile.readText(Charsets.UTF_8)
+                val cachedList = parseBiquoteJson(cachedString)
+                if (cachedList.isNotEmpty()) {
+                    DebugLogger.log("fetchBiquoteOHLC: Loaded ${cachedList.size} points from cache")
+                    withContext(Dispatchers.Main) { onCachedData(cachedList) }
+                }
+            } catch (e: Exception) {
+                DebugLogger.log("fetchBiquoteOHLC: Cache read failed ${e.message}")
+            }
+        }
+
         try {
             val request = Request.Builder()
                 .url(url)
@@ -376,46 +398,62 @@ object DebugLogger {
             val bodyString = response.body?.string()?.trim() ?: ""
             DebugLogger.log("fetchBiquoteOHLC: body len ${bodyString.length}")
             if (bodyString.isEmpty()) return@withContext emptyList()
+
+            // 存入缓存
+            try {
+                cacheFile?.writeText(bodyString, Charsets.UTF_8)
+            } catch (e: Exception) {}
             
-            var dataArray: JSONArray? = null
-            if (bodyString.startsWith("[")) {
-                dataArray = JSONArray(bodyString)
-            } else {
-                val root = JSONObject(bodyString)
-                dataArray = root.optJSONArray("bars") ?: root.optJSONArray("data")
-                if (dataArray == null) {
-                    DebugLogger.log("fetchBiquoteOHLC: No bars/data array in object! Keys: ${root.keys().asSequence().toList()}")
-                }
-            }
-            if (dataArray == null) {
-                DebugLogger.log("fetchBiquoteOHLC: parsed dataArray is NULL")
-                return@withContext emptyList()
-            }
-            
-            val list = mutableListOf<ChartPoint>()
-            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-            sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-            
-            for (i in 0 until dataArray.length()) {
-                val obj = dataArray.optJSONObject(i) ?: continue
-                val tStr = obj.optString("openTime")
-                val t = try { sdf.parse(tStr)?.time ?: 0L } catch(e:Exception){0L}
-                val o = obj.optDouble("open", 0.0)
-                val h = obj.optDouble("high", 0.0)
-                val l = obj.optDouble("low", 0.0)
-                val c = obj.optDouble("close", 0.0)
-                if (t > 0 && c > 0) {
-                    list.add(ChartPoint(t, c, o, h, l, true))
-                }
-            }
-            list.sortBy { it.timestamp }
+            val list = parseBiquoteJson(bodyString)
             DebugLogger.log("fetchBiquoteOHLC: SUCCESS $symbol parsed ${list.size} points")
             return@withContext list
         } catch (t: Throwable) {
             DebugLogger.log("fetchBiquoteOHLC EXCEPTION $symbol: ${t.message}")
             Log.e(TAG, "fetchBiquoteOHLC failed for $symbol: ${t.message}", t)
+            
+            // 如果网络失败，尝试从缓存返回最后的数据兜底（避免 UI 空白）
+            if (cacheFile != null && cacheFile.exists()) {
+                try {
+                    return@withContext parseBiquoteJson(cacheFile.readText(Charsets.UTF_8))
+                } catch(e: Exception){}
+            }
             return@withContext emptyList()
         }
+    }
+
+    private fun parseBiquoteJson(bodyString: String): List<ChartPoint> {
+        var dataArray: JSONArray? = null
+        if (bodyString.startsWith("[")) {
+            dataArray = JSONArray(bodyString)
+        } else {
+            val root = JSONObject(bodyString)
+            dataArray = root.optJSONArray("bars") ?: root.optJSONArray("data")
+            if (dataArray == null) {
+                DebugLogger.log("parseBiquoteJson: No bars/data array in object! Keys: ${root.keys().asSequence().toList()}")
+            }
+        }
+        if (dataArray == null) {
+            return emptyList()
+        }
+        
+        val list = mutableListOf<ChartPoint>()
+        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        
+        for (i in 0 until dataArray.length()) {
+            val obj = dataArray.optJSONObject(i) ?: continue
+            val tStr = obj.optString("openTime")
+            val t = try { sdf.parse(tStr)?.time ?: 0L } catch(e:Exception){0L}
+            val o = obj.optDouble("open", 0.0)
+            val h = obj.optDouble("high", 0.0)
+            val l = obj.optDouble("low", 0.0)
+            val c = obj.optDouble("close", 0.0)
+            if (t > 0 && c > 0) {
+                list.add(ChartPoint(t, c, o, h, l, true))
+            }
+        }
+        list.sortBy { it.timestamp }
+        return list
     }
 }
 

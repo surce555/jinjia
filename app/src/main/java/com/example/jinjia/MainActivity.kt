@@ -101,7 +101,8 @@ class MainActivity : AppCompatActivity() {
             allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
             
             val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
-            GoldRepository.proxyUrl = sp.getString("biquote_proxy", "https://jinjia.suziqi1994.workers.dev")
+            GoldRepository.proxyUrl = sp.getString("biquote_proxy", "")
+            GoldRepository.cacheDir = cacheDir
 
             initRecyclerView()
             initIntervalSpinner()
@@ -262,7 +263,28 @@ class MainActivity : AppCompatActivity() {
                 if (isRealtime) {
                     val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
                     val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
-                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") }
+                                        var cachedDxy = emptyList<ChartPoint>()
+                    val updateRealtimeCache = {
+                        if (cachedDxy.isNotEmpty() && mainDashboardChartPoints != null && mainDashboardLondonPoints != null) {
+                            binding.chartMainDashboard.setCompareChartData(
+                                primaryPoints = mainDashboardChartPoints!!,
+                                primaryTitle = cleanTargetName,
+                                primaryUnit = target.unit,
+                                secondaryPoints = mainDashboardLondonPoints!!,
+                                secondaryTitle = "伦敦金",
+                                secondaryUnit = "美元/盎司",
+                                thirdPoints = cachedDxy,
+                                thirdTitle = "美元指数",
+                                thirdUnit = "",
+                                chartMode = 0
+                            )
+                        }
+                    }
+
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") { pts ->
+                        cachedDxy = pts
+                        withContext(Dispatchers.Main) { updateRealtimeCache() }
+                    } }
                     
                     val targetPoints = targetJob.await()
                     val londonPoints = londonJob.await()
@@ -286,8 +308,30 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 } else {
-                    val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) }
-                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) }
+                                        var cachedLondon = emptyList<ChartPoint>()
+                    var cachedDxy = emptyList<ChartPoint>()
+                    
+                    val updateKlineCache = {
+                        binding.chartMainDashboard.setCompareChartData(
+                            primaryPoints = emptyList(),
+                            primaryTitle = "",
+                            primaryUnit = "",
+                            secondaryPoints = cachedLondon,
+                            secondaryTitle = "伦敦金",
+                            secondaryUnit = "美元/盎司",
+                            thirdPoints = cachedDxy,
+                            thirdTitle = "美元指数",
+                            thirdUnit = "",
+                            chartMode = 1
+                        )
+                    }
+
+                    val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) { pts -> 
+                        cachedLondon = pts; withContext(Dispatchers.Main) { updateKlineCache() }
+                    } }
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) { pts -> 
+                        cachedDxy = pts; withContext(Dispatchers.Main) { updateKlineCache() }
+                    } }
                     
                     val londonPoints = londonJob.await()
                     val dxyPoints = dxyJob.await()
@@ -890,7 +934,7 @@ ${sbPoints.toString().trimEnd()}
         dialogBinding.cbCatRecycle.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", true)
 
         // 初始化代理地址
-        val currentProxy = sp.getString("biquote_proxy", "https://jinjia.suziqi1994.workers.dev")
+        val currentProxy = sp.getString("biquote_proxy", "")
         dialogBinding.etProxyUrl.setText(currentProxy)
 
         // 全选 / 反选机构快捷按钮
