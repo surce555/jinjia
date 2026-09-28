@@ -101,7 +101,7 @@ class MainActivity : AppCompatActivity() {
             allTargetsList.addAll(GoldDataParser.DEFAULT_TARGETS)
             
             val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
-            GoldRepository.proxyUrl = sp.getString("biquote_proxy", "")
+            GoldRepository.proxyUrl = sp.getString("biquote_proxy", "https://jinjia.suziqi1994.workers.dev")
 
             initRecyclerView()
             initIntervalSpinner()
@@ -890,7 +890,7 @@ ${sbPoints.toString().trimEnd()}
         dialogBinding.cbCatRecycle.isChecked = sp.getBoolean("show_cat_${GoldDataParser.CAT_RECYCLE}", true)
 
         // 初始化代理地址
-        val currentProxy = sp.getString("biquote_proxy", "")
+        val currentProxy = sp.getString("biquote_proxy", "https://jinjia.suziqi1994.workers.dev")
         dialogBinding.etProxyUrl.setText(currentProxy)
 
         // 全选 / 反选机构快捷按钮
