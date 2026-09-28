@@ -246,8 +246,8 @@ class MainActivity : AppCompatActivity() {
 
         val timeframeStr = when (tabIndex) {
             1 -> "1d"
-            2 -> "1w"
-            3 -> "1M"
+            2 -> "1wk"
+            3 -> "1mo"
             else -> "5m"
         }
 
@@ -259,7 +259,7 @@ class MainActivity : AppCompatActivity() {
                 if (isRealtime) {
                     val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
                     val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
-                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") }
+                    val dxyJob = async { GoldRepository.fetchYahooOHLC("DX-Y.NYB", "5m") }
                     
                     val targetPoints = targetJob.await()
                     val londonPoints = londonJob.await()
@@ -283,8 +283,8 @@ class MainActivity : AppCompatActivity() {
                         )
                     }
                 } else {
-                    val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) }
-                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) }
+                    val londonJob = async { GoldRepository.fetchYahooOHLC("GC=F", timeframeStr) }
+                    val dxyJob = async { GoldRepository.fetchYahooOHLC("DX-Y.NYB", timeframeStr) }
                     
                     val londonPoints = londonJob.await()
                     val dxyPoints = dxyJob.await()
@@ -719,19 +719,19 @@ class MainActivity : AppCompatActivity() {
                 val isRealtime = tabIndex == 0
                 val timeframeStr = when (tabIndex) {
                     1 -> "1d"
-                    2 -> "1w"
-                    3 -> "1M"
+                    2 -> "1wk"
+                    3 -> "1mo"
                     else -> "5m"
                 }
                 
                 val promptText = if (isRealtime) {
                     val targetPts = if (!mainDashboardChartPoints.isNullOrEmpty()) mainDashboardChartPoints!! else GoldRepository.fetchIntradayChart(item.id)
                     val londonPts = if (!mainDashboardLondonPoints.isNullOrEmpty()) mainDashboardLondonPoints!! else GoldRepository.fetchIntradayChart("realtime_gj")
-                    val dxyPts = GoldRepository.fetchBiquoteOHLC("DXY", "5m")
+                    val dxyPts = GoldRepository.fetchYahooOHLC("DX-Y.NYB", "5m")
                     buildRealtimeAiPrompt(item, targetPts, londonPts, dxyPts)
                 } else {
-                    val londonPts = GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr)
-                    val dxyPts = GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr)
+                    val londonPts = GoldRepository.fetchYahooOHLC("GC=F", timeframeStr)
+                    val dxyPts = GoldRepository.fetchYahooOHLC("DX-Y.NYB", timeframeStr)
                     val tfLabel = when(tabIndex) { 1->"日K线"; 2->"周K线"; 3->"月K线"; else->"K线" }
                     buildKLineAiPrompt(tfLabel, londonPts, dxyPts)
                 }
