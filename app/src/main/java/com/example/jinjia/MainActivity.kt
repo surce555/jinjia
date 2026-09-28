@@ -51,6 +51,7 @@ class MainActivity : AppCompatActivity() {
     private var selectedTargetItem: GoldItem? = null
     private var currentSelectedCategory: String = GoldDataParser.CAT_REALTIME
     private var mainDashboardChartPoints: List<ChartPoint>? = null
+    private var mainDashboardLondonPoints: List<ChartPoint>? = null
 
     // 刷新频率选项映射 (严格限制下限 >= 0.5 分钟/30秒)
     private val intervalOptions = listOf(
@@ -229,15 +230,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 刷新主看板日内分时动态走势图
+     * 刷新主看板日内分时动态走势对比图 (盯盘目标 vs 国际伦敦金)
      */
     private fun updateMainDashboardChart(target: GoldItem) {
+        val cleanTargetName = target.title
+            .removePrefix("[实时] ")
+            .removePrefix("[银行] ")
+            .removePrefix("[金店] ")
+            .removePrefix("[大盘] ")
+            .removePrefix("[回收] ")
+
+        binding.tvLegendTarget.text = "● $cleanTargetName"
+
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val points = GoldRepository.fetchIntradayChart(target.id)
-                mainDashboardChartPoints = points
+                // 并发拉取当前选中的盯盘标的与基准国际伦敦金分时走势
+                val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
+                val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
+                val targetPoints = targetJob.await()
+                val londonPoints = londonJob.await()
+
+                mainDashboardChartPoints = targetPoints
+                mainDashboardLondonPoints = londonPoints
+
                 withContext(Dispatchers.Main) {
-                    binding.chartMainDashboard.setChartData(points, target.unit)
+                    binding.chartMainDashboard.setCompareChartData(
+                        primaryPoints = targetPoints,
+                        primaryTitle = cleanTargetName,
+                        primaryUnit = target.unit,
+                        secondaryPoints = londonPoints,
+                        secondaryTitle = "国际伦敦金",
+                        secondaryUnit = "美元/盎司"
+                    )
                 }
             } catch (e: Exception) {
                 Log.w("MainActivity", "updateMainDashboardChart error: ${e.message}")
