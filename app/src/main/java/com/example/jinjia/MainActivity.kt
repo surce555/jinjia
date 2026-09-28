@@ -524,6 +524,15 @@ class MainActivity : AppCompatActivity() {
             copyAiAnalysisPrompt()
         }
 
+        binding.btnCopyAiPrompt.setOnLongClickListener {
+            val logs = GoldRepository.DebugLogger.getLogText()
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clip = android.content.ClipData.newPlainText("Debug Logs", logs)
+            clipboard.setPrimaryClip(clip)
+            android.widget.Toast.makeText(this, "调试日志已复制到剪贴板", android.widget.Toast.LENGTH_LONG).show()
+            true
+        }
+
         binding.btnDashboardAiPrompt.setOnClickListener {
             copyAiAnalysisPrompt()
         }

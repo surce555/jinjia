@@ -344,8 +344,19 @@ object GoldRepository {
      * @param symbol 如 "XAUUSD" 或 "DXY"
      * @param interval 如 "1d", "1w", "1M" 等
      */
+object DebugLogger {
+    val logs = java.util.Collections.synchronizedList(mutableListOf<String>())
+    fun log(msg: String) {
+        val time = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.US).format(java.util.Date())
+        logs.add("[$time] $msg")
+        if (logs.size > 200) logs.removeAt(0)
+    }
+    fun getLogText(): String = logs.joinToString("\n")
+}
+
     suspend fun fetchBiquoteOHLC(symbol: String, interval: String): List<ChartPoint> = withContext(Dispatchers.IO) {
         val url = "https://biquote.io/api/$symbol/ohlc?interval=$interval"
+        DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
         try {
             val request = Request.Builder()
                 .url(url)
@@ -354,17 +365,29 @@ object GoldRepository {
                 .build()
 
             val response = okHttpClient.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext emptyList()
+            if (!response.isSuccessful) {
+                DebugLogger.log("fetchBiquoteOHLC: HTTP ERROR ${response.code}")
+                return@withContext emptyList()
+            }
             
-            val bodyString = response.body?.string()?.trim() ?: return@withContext emptyList()
+            val bodyString = response.body?.string()?.trim() ?: ""
+            DebugLogger.log("fetchBiquoteOHLC: body len ${bodyString.length}")
+            if (bodyString.isEmpty()) return@withContext emptyList()
+            
             var dataArray: JSONArray? = null
             if (bodyString.startsWith("[")) {
                 dataArray = JSONArray(bodyString)
             } else {
                 val root = JSONObject(bodyString)
                 dataArray = root.optJSONArray("bars") ?: root.optJSONArray("data")
+                if (dataArray == null) {
+                    DebugLogger.log("fetchBiquoteOHLC: No bars/data array in object! Keys: ${root.keys().asSequence().toList()}")
+                }
             }
-            if (dataArray == null) return@withContext emptyList()
+            if (dataArray == null) {
+                DebugLogger.log("fetchBiquoteOHLC: parsed dataArray is NULL")
+                return@withContext emptyList()
+            }
             
             val list = mutableListOf<ChartPoint>()
             val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
@@ -383,8 +406,10 @@ object GoldRepository {
                 }
             }
             list.sortBy { it.timestamp }
+            DebugLogger.log("fetchBiquoteOHLC: SUCCESS $symbol parsed ${list.size} points")
             return@withContext list
         } catch (t: Throwable) {
+            DebugLogger.log("fetchBiquoteOHLC EXCEPTION $symbol: ${t.message}")
             Log.e(TAG, "fetchBiquoteOHLC failed for $symbol: ${t.message}", t)
             return@withContext emptyList()
         }
