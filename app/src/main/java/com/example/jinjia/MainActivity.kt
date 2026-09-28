@@ -283,7 +283,7 @@ class MainActivity : AppCompatActivity() {
 
                     val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") { pts ->
                         cachedDxy = pts
-                        withContext(Dispatchers.Main) { updateRealtimeCache() }
+                        runOnUiThread { updateRealtimeCache() }
                     } }
                     
                     val targetPoints = targetJob.await()
@@ -327,10 +327,10 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) { pts -> 
-                        cachedLondon = pts; withContext(Dispatchers.Main) { updateKlineCache() }
+                        cachedLondon = pts; runOnUiThread { updateKlineCache() }
                     } }
                     val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) { pts -> 
-                        cachedDxy = pts; withContext(Dispatchers.Main) { updateKlineCache() }
+                        cachedDxy = pts; runOnUiThread { updateKlineCache() }
                     } }
                     
                     val londonPoints = londonJob.await()
