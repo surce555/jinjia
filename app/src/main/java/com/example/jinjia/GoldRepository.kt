@@ -338,13 +338,60 @@ object GoldRepository {
             return@withContext emptyList()
         }
     }
+    /**
+     * Biquote 获取 OHLC 历史K线或高频分钟线
+     * @param symbol 如 "XAUUSD" 或 "DXY"
+     * @param interval 如 "1d", "1w", "1M" 等
+     */
+    suspend fun fetchBiquoteOHLC(symbol: String, interval: String): List<ChartPoint> = withContext(Dispatchers.IO) {
+        val url = "https://biquote.io/api/$symbol/ohlc?interval=$interval"
+        try {
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", BROWSER_UA)
+                .get()
+                .build()
+
+            val response = okHttpClient.newCall(request).execute()
+            if (!response.isSuccessful) return@withContext emptyList()
+            
+            val bodyString = response.body?.string() ?: return@withContext emptyList()
+            val root = JSONObject(bodyString)
+            val dataArray = root.optJSONArray("data") ?: return@withContext emptyList()
+            
+            val list = mutableListOf<ChartPoint>()
+            val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+            sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            
+            for (i in 0 until dataArray.length()) {
+                val obj = dataArray.optJSONObject(i) ?: continue
+                val tStr = obj.optString("openTime")
+                val t = try { sdf.parse(tStr)?.time ?: 0L } catch(e:Exception){0L}
+                val o = obj.optDouble("open", 0.0)
+                val h = obj.optDouble("high", 0.0)
+                val l = obj.optDouble("low", 0.0)
+                val c = obj.optDouble("close", 0.0)
+                if (t > 0 && c > 0) {
+                    list.add(ChartPoint(t, c, o, h, l, true))
+                }
+            }
+            list.sortBy { it.timestamp }
+            return@withContext list
+        } catch (t: Throwable) {
+            Log.e(TAG, "fetchBiquoteOHLC failed for $symbol: ${t.message}", t)
+            return@withContext emptyList()
+        }
+    }
 }
 
 /**
- * 分时走势单点数据模型
+ * 分时走势单点数据模型，兼顾 K线(OHLC)
  */
 data class ChartPoint(
     val timestamp: Long,
-    val price: Double
+    val price: Double,
+    val open: Double = price,
+    val high: Double = price,
+    val low: Double = price,
+    val isKLine: Boolean = false
 )
-

@@ -240,28 +240,69 @@ class MainActivity : AppCompatActivity() {
             .removePrefix("[大盘] ")
             .removePrefix("[回收] ")
 
+        val tabIndex = binding.tabChartTimeframe.selectedTabPosition
+        val isRealtime = tabIndex == 0
+        val chartMode = if (isRealtime) 0 else 1
+
+        val timeframeStr = when (tabIndex) {
+            1 -> "1d"
+            2 -> "1w"
+            3 -> "1M"
+            else -> "5m"
+        }
+
+        binding.tvLegendTarget.visibility = if (isRealtime) View.VISIBLE else View.GONE
         binding.tvLegendTarget.text = "● $cleanTargetName"
 
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // 并发拉取当前选中的盯盘标的与基准国际伦敦金分时走势
-                val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
-                val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
-                val targetPoints = targetJob.await()
-                val londonPoints = londonJob.await()
+                if (isRealtime) {
+                    val targetJob = async { GoldRepository.fetchIntradayChart(target.id) }
+                    val londonJob = async { GoldRepository.fetchIntradayChart("realtime_gj") }
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") }
+                    
+                    val targetPoints = targetJob.await()
+                    val londonPoints = londonJob.await()
+                    val dxyPoints = dxyJob.await()
 
-                mainDashboardChartPoints = targetPoints
-                mainDashboardLondonPoints = londonPoints
+                    mainDashboardChartPoints = targetPoints
+                    mainDashboardLondonPoints = londonPoints
 
-                withContext(Dispatchers.Main) {
-                    binding.chartMainDashboard.setCompareChartData(
-                        primaryPoints = targetPoints,
-                        primaryTitle = cleanTargetName,
-                        primaryUnit = target.unit,
-                        secondaryPoints = londonPoints,
-                        secondaryTitle = "国际伦敦金",
-                        secondaryUnit = "美元/盎司"
-                    )
+                    withContext(Dispatchers.Main) {
+                        binding.chartMainDashboard.setCompareChartData(
+                            primaryPoints = targetPoints,
+                            primaryTitle = cleanTargetName,
+                            primaryUnit = target.unit,
+                            secondaryPoints = londonPoints,
+                            secondaryTitle = "伦敦金",
+                            secondaryUnit = "美元/盎司",
+                            thirdPoints = dxyPoints,
+                            thirdTitle = "美元指数",
+                            thirdUnit = "",
+                            chartMode = 0
+                        )
+                    }
+                } else {
+                    val londonJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", timeframeStr) }
+                    val dxyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", timeframeStr) }
+                    
+                    val londonPoints = londonJob.await()
+                    val dxyPoints = dxyJob.await()
+
+                    withContext(Dispatchers.Main) {
+                        binding.chartMainDashboard.setCompareChartData(
+                            primaryPoints = emptyList(),
+                            primaryTitle = "",
+                            primaryUnit = "",
+                            secondaryPoints = londonPoints,
+                            secondaryTitle = "伦敦金",
+                            secondaryUnit = "美元/盎司",
+                            thirdPoints = dxyPoints,
+                            thirdTitle = "美元指数",
+                            thirdUnit = "",
+                            chartMode = 1
+                        )
+                    }
                 }
             } catch (e: Exception) {
                 Log.w("MainActivity", "updateMainDashboardChart error: ${e.message}")
@@ -508,6 +549,22 @@ class MainActivity : AppCompatActivity() {
         binding.btnResetChartZoom.setOnClickListener {
             binding.chartMainDashboard.resetZoom()
         }
+
+        binding.tabChartTimeframe.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                val target = selectedTargetItem ?: allTargetsList.firstOrNull()
+                if (target != null) {
+                    updateMainDashboardChart(target)
+                }
+            }
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {
+                val target = selectedTargetItem ?: allTargetsList.firstOrNull()
+                if (target != null) {
+                    updateMainDashboardChart(target)
+                }
+            }
+        })
     }
 
     /**

@@ -241,16 +241,40 @@
                         android:layout_weight="1"
                         android:orientation="vertical">
 
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="📊 日内分时走势对比"
-                            android:textColor="@color/text_primary"
-                            android:textSize="13sp"
-                            android:textStyle="bold" />
+                        <com.google.android.material.tabs.TabLayout
+                            android:id="@+id/tabChartTimeframe"
+                            android:layout_width="match_parent"
+                            android:layout_height="36dp"
+                            app:tabGravity="fill"
+                            app:tabIndicatorColor="@color/gold_primary"
+                            app:tabIndicatorHeight="2dp"
+                            app:tabMode="fixed"
+                            app:tabPaddingEnd="4dp"
+                            app:tabPaddingStart="4dp"
+                            app:tabSelectedTextColor="@color/gold_primary_dark"
+                            app:tabTextColor="@color/text_secondary">
+                            
+                            <com.google.android.material.tabs.TabItem
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="实时" />
+                            <com.google.android.material.tabs.TabItem
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="日K" />
+                            <com.google.android.material.tabs.TabItem
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="周K" />
+                            <com.google.android.material.tabs.TabItem
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="月K" />
+                        </com.google.android.material.tabs.TabLayout>
 
-                        <!-- 走势对比图例 (科技蓝盯盘目标 vs 翡翠绿伦敦金) -->
+                        <!-- 走势对比图例 -->
                         <LinearLayout
+                            android:id="@+id/llChartLegends"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:layout_marginTop="3dp"
@@ -267,11 +291,22 @@
                                 android:textStyle="bold" />
 
                             <TextView
+                                android:id="@+id/tvLegendLondon"
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:layout_marginStart="10dp"
-                                android:text="● 国际伦敦金"
+                                android:text="● 伦敦金"
                                 android:textColor="#059669"
+                                android:textSize="11sp"
+                                android:textStyle="bold" />
+                                
+                            <TextView
+                                android:id="@+id/tvLegendUSD"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:text="● 美元指数"
+                                android:textColor="#9333EA"
                                 android:textSize="11sp"
                                 android:textStyle="bold" />
                         </LinearLayout>
