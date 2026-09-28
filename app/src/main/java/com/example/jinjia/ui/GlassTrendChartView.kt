@@ -413,8 +413,12 @@ class GlassTrendChartView @JvmOverloads constructor(
         val chartHeight = h - paddingTop - paddingBottom
         if (chartWidth <= 0 || chartHeight <= 0) return
 
-        // 1. 绘制 3 条极淡底色参考线 (高位、中位、低位)
+        // 1. 绘制极淡底色参考线 (高位、中位、低位，高度较大时自适应增补四等分参考线)
         canvas.drawLine(paddingLeft, paddingTop, w - paddingRight, paddingTop, gridPaint)
+        if (chartHeight > 180f.toPx()) {
+            canvas.drawLine(paddingLeft, paddingTop + chartHeight * 0.25f, w - paddingRight, paddingTop + chartHeight * 0.25f, gridPaint)
+            canvas.drawLine(paddingLeft, paddingTop + chartHeight * 0.75f, w - paddingRight, paddingTop + chartHeight * 0.75f, gridPaint)
+        }
         canvas.drawLine(paddingLeft, paddingTop + chartHeight / 2f, w - paddingRight, paddingTop + chartHeight / 2f, gridPaint)
         canvas.drawLine(paddingLeft, h - paddingBottom, w - paddingRight, h - paddingBottom, gridPaint)
 
@@ -620,8 +624,12 @@ class GlassTrendChartView @JvmOverloads constructor(
         val chartHeight = h - paddingTop - paddingBottom
         if (chartWidth <= 0 || chartHeight <= 0) return
 
-        // 极淡参考线
+        // 极淡参考线 (高度较大时自适应增补四等分参考线)
         canvas.drawLine(paddingLeft, paddingTop, w - paddingRight, paddingTop, gridPaint)
+        if (chartHeight > 180f.toPx()) {
+            canvas.drawLine(paddingLeft, paddingTop + chartHeight * 0.25f, w - paddingRight, paddingTop + chartHeight * 0.25f, gridPaint)
+            canvas.drawLine(paddingLeft, paddingTop + chartHeight * 0.75f, w - paddingRight, paddingTop + chartHeight * 0.75f, gridPaint)
+        }
         canvas.drawLine(paddingLeft, paddingTop + chartHeight / 2f, w - paddingRight, paddingTop + chartHeight / 2f, gridPaint)
         canvas.drawLine(paddingLeft, h - paddingBottom, w - paddingRight, h - paddingBottom, gridPaint)
 

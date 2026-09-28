@@ -310,12 +310,12 @@
                         app:cornerRadius="16dp" />
                 </LinearLayout>
 
-                <!-- 主看板原生分时走势对比图表控件 -->
+                <!-- 主看板原生分时走势对比图表控件 (高度翻倍至 320dp，提供宽敞舒适的捏合缩放与平移操作空间) -->
                 <com.example.jinjia.ui.GlassTrendChartView
                     android:id="@+id/chartMainDashboard"
                     android:layout_width="match_parent"
-                    android:layout_height="160dp"
-                    android:layout_marginTop="6dp" />
+                    android:layout_height="320dp"
+                    android:layout_marginTop="8dp" />
 
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
