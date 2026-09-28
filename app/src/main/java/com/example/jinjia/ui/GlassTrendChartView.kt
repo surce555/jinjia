@@ -527,7 +527,7 @@ class GlassTrendChartView @JvmOverloads constructor(
                     val c = ys[i]
                     val hi = ysHigh!![i]
                     val lo = ysLow!![i]
-                    val isUp = pts[i].close >= pts[i].open // Wait, price is close. ChartPoint needs open/close. 
+                    val isUp = pts[i].price >= pts[i].open // Wait, price is close. ChartPoint needs open/close. 
                     // Actually, if price > open then it's UP in green? No, red in China.
                     val rectTop = minOf(o, c)
                     val rectBottom = maxOf(o, c)
