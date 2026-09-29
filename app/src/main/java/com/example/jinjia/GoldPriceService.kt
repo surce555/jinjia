@@ -639,6 +639,31 @@ class GoldPriceService : Service() {
      * 单项高频实时数据更新处理
      */
     private fun handleSingleItemUpdate(item: GoldItem) {
+        val now = System.currentTimeMillis()
+        val lastData = lastPricesForSpike[item.id]
+        if (lastData != null) {
+            val (lastPrice, lastTime) = lastData
+            val timeDiffMins = (now - lastTime) / 60000.0
+            if (timeDiffMins <= 30) { 
+                val changePercent = Math.abs(item.price - lastPrice) / lastPrice
+                if (changePercent > 0.005) { 
+                    val dir = if (item.price > lastPrice) "急涨" else "急跌"
+                    val msg = "⚠️ ${item.displayName} 出现短线异动$dir! (30分钟振幅超0.5%) 当前: ${item.price}"
+                    sendNotification(item.id.hashCode() + 1000, "异动警报", msg)
+                    lastPricesForSpike[item.id] = Pair(item.price, now) 
+                }
+            } else {
+                lastPricesForSpike[item.id] = Pair(item.price, now)
+            }
+        } else {
+            lastPricesForSpike[item.id] = Pair(item.price, now)
+        }
+        
+        try {
+            com.example.jinjia.widget.GoldWidgetProvider.updateWidget(this, 
+                "N/A", item.displayName, item.price.toString())
+        } catch (e: Exception) {}
+
         val timestamp = System.currentTimeMillis()
         val currentPrice = item.price
         val currentTitle = item.displayName
@@ -814,6 +839,35 @@ class GoldPriceService : Service() {
             screenWakeLock.acquire(10_000L)
         } catch (t: Throwable) {
             Log.e(TAG, "wakeUpScreen error: ${t.message}", t)
+        }
+    }
+
+    
+    private fun sendNotification(notifId: Int, title: String, message: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val pendingIntent = PendingIntent.getActivity(this, notifId, intent, flags)
+
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID_ALERTS)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+
+        try {
+            notificationManager.notify(notifId, builder.build())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send notification: ${e.message}")
         }
     }
 
