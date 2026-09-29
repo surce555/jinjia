@@ -1021,7 +1021,7 @@ class GlassTrendChartView @JvmOverloads constructor(
         val fmt = if (chartMode == 1) java.text.SimpleDateFormat("MM-dd", java.util.Locale.getDefault()) else timeFormat
         val timeStr = fmt.format(java.util.Date(tMillis))
         
-        val p1Str = if (chartMode == 0) "● %s: ¥%.2f %s".format(primaryTitle, p1.price, priceUnit) else "● %s: $%.2f".format(secondaryTitle, p1.price)
+        val p1Str = if (chartMode == 0) "● %s: ¥%.2f %s".format(primaryTitle, p1.price, priceUnit) else "● %s: 开$%.2f 高$%.2f 低$%.2f 收$%.2f".format(secondaryTitle, p1.open, p1.high, p1.low, p1.price)
         val p2Str = if (chartMode == 0 && p2 != null) "● %s: $%.2f %s".format(secondaryTitle, p2.price, secondaryPriceUnit) else ""
         val p3Str = if (p3 != null) "● %s: %.2f".format(thirdTitle, p3.price) else ""
 
@@ -1132,7 +1132,8 @@ class GlassTrendChartView @JvmOverloads constructor(
     }
 
     private fun updateSelectedPoint(touchX: Float) {
-        if (points.isEmpty()) return
+        val totalCount = if (isCompareMode) maxOf(points.size, secondaryPoints.size, thirdPoints.size) else points.size
+        if (totalCount == 0) return
         val chartLeft = 14f.toPx()
         val chartWidth = (width - chartLeft - 14f.toPx()).coerceAtLeast(1f)
         val normX = (viewportStartX + (touchX - chartLeft) / (scaleX * chartWidth)).coerceIn(0f, 1f)
