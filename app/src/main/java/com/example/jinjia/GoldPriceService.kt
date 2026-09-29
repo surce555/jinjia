@@ -132,6 +132,7 @@ class GoldPriceService : Service() {
 
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
+    private val lastPricesForSpike = mutableMapOf<String, Pair<Double, Long>>()
     private var pollJob: Job? = null
     private var testJob: Job? = null
 
