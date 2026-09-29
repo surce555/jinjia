@@ -85,14 +85,7 @@ class ProfitCalculatorDialog(private val context: Context, private val currentIt
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) { calculateSummary() }
         })
-        // dummy text watcher to replace old one
-        val dummy = object : TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            override fun afterTextChanged(s: Editable?) {
-                calculateSummary()
-            }
-        })
+
         
         binding.btnAddPosition.setOnClickListener {
             val priceStr = binding.etAddPrice.text.toString()
@@ -187,7 +180,6 @@ class ProfitCalculatorDialog(private val context: Context, private val currentIt
         }
         
         if (totalAmount > 0) {
-            val avgPrice = totalCost / totalAmount
             val avgPrice = totalCost / totalAmount
             val realBreakEven = avgPrice + spread
             val marketValue = totalAmount * (currentPrice - spread)

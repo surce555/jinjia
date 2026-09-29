@@ -541,8 +541,7 @@ class MainActivity : AppCompatActivity() {
         binding.tvMacroEvent.text = eventStr
     }
 
-    private fun initTabs()
-        updateMacroCalendar() {
+    private fun initTabs() {
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
         binding.tabLayout.removeAllTabs()
 
