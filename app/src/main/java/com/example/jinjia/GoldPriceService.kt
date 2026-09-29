@@ -35,6 +35,10 @@ import java.util.Locale
  * 金价后台轮询与多品类精准监控服务
  * 支持双数据源定向高频轮询与 Doze 休眠准时唤醒，提供锁屏通知穿透与测试模式
  */
+
+data class TargetThresholds(val high: Double, val low: Double, val title: String)
+data class AlertState(var hasAlertedHigh: Boolean = false, var hasAlertedLow: Boolean = false, var lastAlertTime: Long = 0L)
+
 class GoldPriceService : Service() {
 
     data class MonitorState(
@@ -157,8 +161,24 @@ class GoldPriceService : Service() {
     private var lastAlertTime: Long = 0L
     private var lastAlertPrice: Double = 0.0
     private var isAppInForeground: Boolean = false
+    private val alertStates = mutableMapOf<String, AlertState>()
     private var alertCounter: Int = 0
     private var test30sWakeLock: PowerManager.WakeLock? = null
+
+    
+    private fun getActiveMonitors(): Map<String, TargetThresholds> {
+        val sp = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val jsonStr = sp.getString("monitor_configs", "{}") ?: "{}"
+        val map = mutableMapOf<String, TargetThresholds>()
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            for (key in root.keys()) {
+                val obj = root.getJSONObject(key)
+                map[key] = TargetThresholds(obj.optDouble("high", 0.0), obj.optDouble("low", 0.0), obj.optString("title", key))
+            }
+        } catch (e: Exception) {}
+        return map
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -167,7 +187,7 @@ class GoldPriceService : Service() {
             val saved = getSavedState(this)
             targetId = saved.targetId
             targetTitle = saved.targetTitle
-            if (saved.targetThreshold != null) targetThreshold = saved.targetThreshold
+            
             intervalMinutes = saved.intervalMinutes
             _monitorState.value = saved
         } catch (t: Throwable) {
@@ -605,7 +625,39 @@ class GoldPriceService : Service() {
     /**
      * 评估是否触发跌破预警（支持首次跌破、深跌追加告警与长周期防漏看）
      */
-    private fun shouldTriggerAlert(currentPrice: Double, threshold: Double): Boolean {
+    
+    private fun checkAndTriggerAlerts(item: GoldItem) {
+        val configs = getActiveMonitors()
+        val cfg = configs[item.id] ?: return
+        val state = alertStates.getOrPut(item.id) { AlertState() }
+        val now = System.currentTimeMillis()
+        
+        // Check High
+        if (cfg.high > 0 && item.price >= cfg.high) {
+            if (!state.hasAlertedHigh || (now - state.lastAlertTime > 30 * 60 * 1000L)) {
+                sendAlertNotification(item.displayName, item.price, cfg.high, item.unit, "上涨突破")
+                state.hasAlertedHigh = true
+                state.hasAlertedLow = false
+                state.lastAlertTime = now
+            }
+        } else if (cfg.high > 0 && item.price < cfg.high * 0.998) {
+            state.hasAlertedHigh = false // reset if it falls back down significantly
+        }
+        
+        // Check Low
+        if (cfg.low > 0 && item.price <= cfg.low) {
+            if (!state.hasAlertedLow || (now - state.lastAlertTime > 30 * 60 * 1000L)) {
+                sendAlertNotification(item.displayName, item.price, cfg.low, item.unit, "下跌跌破")
+                state.hasAlertedLow = true
+                state.hasAlertedHigh = false
+                state.lastAlertTime = now
+            }
+        } else if (cfg.low > 0 && item.price > cfg.low * 1.002) {
+            state.hasAlertedLow = false // reset if it bounces back up
+        }
+    }
+
+    private fun shouldTriggerAlertOld(currentPrice: Double, threshold: Double): Boolean {
         if (threshold <= 0 || currentPrice <= 0) return false
         if (threshold == THRESHOLD_TEST_30S || threshold == THRESHOLD_TEST_5M) return false
         if (currentPrice >= threshold) {
@@ -671,9 +723,7 @@ class GoldPriceService : Service() {
         targetTitle = currentTitle
 
         // 1. 边缘触发告警状态机（低于阈值推送通知）
-        if (shouldTriggerAlert(currentPrice, targetThreshold)) {
-            sendAlertNotification(currentTitle, currentPrice, targetThreshold, item.unit)
-        }
+        checkAndTriggerAlerts(item)
 
         // 2. 合并更新本地全量列表
         val currentList = _monitorState.value.allItems.toMutableList()
@@ -871,7 +921,7 @@ class GoldPriceService : Service() {
         }
     }
 
-    private fun sendAlertNotification(title: String, price: Double, threshold: Double, unit: String) {
+    private fun sendAlertNotification(title: String, price: Double, threshold: Double, unit: String, dir: String = "跌破") {
         wakeUpScreen()
         playAlertVibrationOnly()
 

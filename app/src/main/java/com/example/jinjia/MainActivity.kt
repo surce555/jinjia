@@ -40,6 +40,62 @@ import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
+    // ------------------ Multi-Target Monitoring Logic ------------------
+    private fun getMonitorConfigs(): MutableMap<String, org.json.JSONObject> {
+        val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+        val jsonStr = sp.getString("monitor_configs", "{}") ?: "{}"
+        val map = mutableMapOf<String, org.json.JSONObject>()
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            for (key in root.keys()) {
+                map[key] = root.getJSONObject(key)
+            }
+        } catch (e: Exception) {}
+        return map
+    }
+
+    private fun saveMonitorConfigs(map: Map<String, org.json.JSONObject>) {
+        val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+        val root = org.json.JSONObject()
+        for ((k, v) in map) root.put(k, v)
+        sp.edit().putString("monitor_configs", root.toString()).apply()
+    }
+
+    private fun loadThresholdsForCurrentTarget() {
+        val configs = getMonitorConfigs()
+        val cfg = configs[currentSelectedId]
+        if (cfg != null) {
+            val high = cfg.optDouble("high", 0.0)
+            val low = cfg.optDouble("low", 0.0)
+            binding.etHighThreshold.setText(if (high > 0) high.toString() else "")
+            binding.etLowThreshold.setText(if (low > 0) low.toString() else "")
+        } else {
+            binding.etHighThreshold.setText("")
+            binding.etLowThreshold.setText("")
+        }
+    }
+
+    private fun saveThresholdsForCurrentTarget() {
+        if (currentSelectedId.isEmpty()) return
+        val highStr = binding.etHighThreshold.text.toString()
+        val lowStr = binding.etLowThreshold.text.toString()
+        val high = highStr.toDoubleOrNull() ?: 0.0
+        val low = lowStr.toDoubleOrNull() ?: 0.0
+        
+        val configs = getMonitorConfigs()
+        if (high == 0.0 && low == 0.0) {
+            configs.remove(currentSelectedId)
+        } else {
+            val obj = org.json.JSONObject()
+            obj.put("high", high)
+            obj.put("low", low)
+            obj.put("title", currentSelectedTitle)
+            configs[currentSelectedId] = obj
+        }
+        saveMonitorConfigs(configs)
+    }
+
+
     private lateinit var binding: ActivityMainBinding
     private lateinit var goldItemAdapter: GoldItemAdapter
 
@@ -107,6 +163,17 @@ class MainActivity : AppCompatActivity() {
             initRecyclerView()
             initIntervalSpinner()
             initTabs()
+
+        val thresholdWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                saveThresholdsForCurrentTarget()
+            }
+        }
+        binding.etHighThreshold.addTextChangedListener(thresholdWatcher)
+        binding.etLowThreshold.addTextChangedListener(thresholdWatcher)
+
         updateMacroCalendar()
             initViews()
 
@@ -541,7 +608,18 @@ class MainActivity : AppCompatActivity() {
         binding.tvMacroEvent.text = eventStr
     }
 
-    private fun initTabs() {
+    private fun initTabs()
+
+        val thresholdWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                saveThresholdsForCurrentTarget()
+            }
+        }
+        binding.etHighThreshold.addTextChangedListener(thresholdWatcher)
+        binding.etLowThreshold.addTextChangedListener(thresholdWatcher)
+ {
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
         binding.tabLayout.removeAllTabs()
 
@@ -671,9 +749,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         // 若输入框为空，推荐预填当前价少 5 元作为参考
-        if (binding.etThreshold.text.isNullOrBlank()) {
+        if (false) {
             val suggested = (item.price - 5.0).coerceAtLeast(1.0)
-            binding.etThreshold.setText("%.2f".format(suggested))
+            // binding.etThreshold.setText("%.2f".format(suggested))
         }
 
         updateMainDashboardChart(item)
@@ -742,13 +820,21 @@ class MainActivity : AppCompatActivity() {
 
         binding.spTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (position in displayItems.indices) {
-                    val item = displayItems[position]
-                    selectedTargetItem = item
-                    // 标的选择立即联动：顶部卡片即时刷新该标的名称与价格及走势
-                    bindTopCardItem(item)
-                    updateMainDashboardChart(item)
+                if (position < spinnerItems.size) {
+                    val item = spinnerItems[position]
+                    currentSelectedId = item.id
+                    currentSelectedTitle = item.displayName
+                    saveLastSelectedTarget(item.id)
+                    loadThresholdsForCurrentTarget()
+                    
+                    // лʱҲˢͼ
+                    if (isKLineMode) {
+                        fetchAndDrawKLine(currentSelectedId)
+                    } else {
+                        updateChartUI(item.id)
+                    }
                 }
+            }
             }
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
@@ -1030,6 +1116,17 @@ ${rtSb.toString().trimEnd()}
 
             // 即时刷新 UI
             initTabs()
+
+        val thresholdWatcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                saveThresholdsForCurrentTarget()
+            }
+        }
+        binding.etHighThreshold.addTextChangedListener(thresholdWatcher)
+        binding.etLowThreshold.addTextChangedListener(thresholdWatcher)
+
         updateMacroCalendar()
             updateTargetSpinner()
             filterAndDisplayList()
@@ -1056,36 +1153,25 @@ ${rtSb.toString().trimEnd()}
     }
 
     private fun startMonitoring() {
-        val inputStr = binding.etThreshold.text?.toString()?.trim()
-        val threshold = inputStr?.toDoubleOrNull()
-
-        if (threshold == null || threshold <= 0) {
-            binding.tilThreshold.error = "请输入有效的监控金价阈值 (如 930.00)"
-            return
-        }
-        binding.tilThreshold.error = null
-
+        // Now it monitors ALL targets configured in SharedPreferences map
+        // We only need to pass the interval
         val interval = intervalOptions.getOrNull(binding.spInterval.selectedItemPosition)?.second ?: 5.0
         val target = selectedTargetItem ?: allTargetsList.firstOrNull()
 
         try {
             val intent = Intent(this, GoldPriceService::class.java).apply {
                 action = GoldPriceService.ACTION_START
-                putExtra(GoldPriceService.EXTRA_THRESHOLD, threshold)
                 putExtra(GoldPriceService.EXTRA_INTERVAL_MINUTES, interval)
                 putExtra(GoldPriceService.EXTRA_TARGET_ID, target?.id ?: "realtime_icbc")
                 putExtra(GoldPriceService.EXTRA_TARGET_NAME, target?.displayName ?: "[实时] 工商银行")
             }
-
             ContextCompat.startForegroundService(this, intent)
-            if (threshold == GoldPriceService.THRESHOLD_TEST_30S) {
-                Toast.makeText(this, "【测试模式已启动】将在 30 秒后推送锁屏测试通知，请立即熄屏测试！", Toast.LENGTH_LONG).show()
-            } else if (threshold == GoldPriceService.THRESHOLD_TEST_5M) {
-                Toast.makeText(this, "【测试模式已启动】将在 5 分钟后推送锁屏测试通知，请熄屏测试！", Toast.LENGTH_LONG).show()
-            } else {
-                Toast.makeText(this, "已启动【${target?.displayName ?: "金价"}】高频监控", Toast.LENGTH_SHORT).show()
-            }
-        } catch (t: Throwable) {
+            binding.btnToggleMonitor.text = "停止全局监控"
+        } catch (e: Exception) {
+            Toast.makeText(this, "启动监控失败: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+ catch (t: Throwable) {
             Log.e("MainActivity", "startMonitoring failed: ${t.message}", t)
             // 全量防崩溃：启动异常时自动重置运行状态，绝不导致死循环闪退
             getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -1129,7 +1215,8 @@ ${rtSb.toString().trimEnd()}
         // 1. 按钮与输入框交互控制
         binding.btnStart.isEnabled = !state.isRunning
         binding.btnStop.isEnabled = state.isRunning
-        binding.etThreshold.isEnabled = !state.isRunning
+        binding.etHighThreshold.isEnabled = !state.isRunning
+        binding.etLowThreshold.isEnabled = !state.isRunning
         binding.spInterval.isEnabled = !state.isRunning
         binding.spTarget.isEnabled = !state.isRunning
 
@@ -1157,19 +1244,17 @@ ${rtSb.toString().trimEnd()}
         }
 
         // 4. 设定阈值与刷新频率 (前台1分钟，后台固定5分钟)
-        if (state.targetThreshold != null && state.targetThreshold > 0) {
-            val symbol = if (state.targetTitle.contains("伦敦金") || state.targetId == "realtime_gj") "$" else "¥"
-            if (state.targetThreshold == GoldPriceService.THRESHOLD_TEST_30S) {
-                binding.tvCurrentThreshold.text = "测试(30秒)"
-            } else if (state.targetThreshold == GoldPriceService.THRESHOLD_TEST_5M) {
-                binding.tvCurrentThreshold.text = "测试(5分钟)"
+                val sp2 = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
+        val jsonStr = sp2.getString("monitor_configs", "{}") ?: "{}"
+        try {
+            val root = org.json.JSONObject(jsonStr)
+            val count = root.length()
+            if (count > 0) {
+                binding.tvCurrentThreshold.text = "已配置 $count 个目标"
             } else {
-                binding.tvCurrentThreshold.text = "$symbol %.2f".format(state.targetThreshold)
+                binding.tvCurrentThreshold.text = "未设置"
             }
-            if (binding.etThreshold.text.isNullOrBlank()) {
-                binding.etThreshold.setText("%.2f".format(state.targetThreshold))
-            }
-        } else {
+        } catch (e: Exception) {
             binding.tvCurrentThreshold.text = "未设置"
         }
         binding.tvCurrentInterval.text = "前台1m / 后台5m"
