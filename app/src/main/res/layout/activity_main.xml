@@ -456,7 +456,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:hint="高阈值(高于)"
-                        app:endIconMode="clear"
+                        app:endIconMode="clear_text"
                         app:helperText="涨破此值即告警">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/etHighThreshold"
@@ -477,7 +477,7 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:hint="低阈值(低于)"
-                        app:endIconMode="clear"
+                        app:endIconMode="clear_text"
                         app:helperText="跌破此值即告警">
                         <com.google.android.material.textfield.TextInputEditText
                             android:id="@+id/etLowThreshold"
