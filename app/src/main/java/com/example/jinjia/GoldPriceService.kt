@@ -854,8 +854,8 @@ class GoldPriceService : Service() {
         }
         val pendingIntent = PendingIntent.getActivity(this, notifId, intent, flags)
 
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID_ALERTS)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
+            .setSmallIcon(R.drawable.ic_gold)
             .setContentTitle(title)
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
