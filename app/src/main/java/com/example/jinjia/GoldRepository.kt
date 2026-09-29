@@ -362,9 +362,10 @@ object DebugLogger {
         interval: String,
         onCachedData: ((List<ChartPoint>) -> Unit)? = null
     ): List<ChartPoint> = withContext(Dispatchers.IO) {
-        val actualInterval = if (interval == "1w") "1d" else interval
+        val actualInterval = if (interval == "1w" || interval == "1M") "1d" else interval
         val base = if (!proxyUrl.isNullOrBlank()) proxyUrl!!.trimEnd('/') else "https://jinjia.lingchenyidianban.site"
-        val url = "$base/api/$symbol/ohlc?interval=$actualInterval"
+        val limitParam = if (interval == "1w" || interval == "1M") "&limit=600" else ""
+        val url = "$base/api/$symbol/ohlc?interval=$actualInterval$limitParam"
         DebugLogger.log("fetchBiquoteOHLC: START $symbol $interval")
 
         val cacheFile = cacheDir?.let { java.io.File(it, "biquote_${symbol}_${interval}.json") }
@@ -375,6 +376,7 @@ object DebugLogger {
                 val cachedString = cacheFile.readText(Charsets.UTF_8)
                 var cachedList = parseBiquoteJson(cachedString)
                 if (interval == "1w") cachedList = aggregateWeekly(cachedList)
+                if (interval == "1M") cachedList = aggregateMonthly(cachedList)
                 if (cachedList.isNotEmpty()) {
                     DebugLogger.log("fetchBiquoteOHLC: Loaded ${cachedList.size} points from cache")
                     withContext(Dispatchers.Main) { onCachedData(cachedList) }
@@ -408,6 +410,7 @@ object DebugLogger {
             
             var list = parseBiquoteJson(bodyString)
             if (interval == "1w") list = aggregateWeekly(list)
+            if (interval == "1M") list = aggregateMonthly(list)
             DebugLogger.log("fetchBiquoteOHLC: SUCCESS $symbol parsed ${list.size} points")
             return@withContext list
         } catch (t: Throwable) {
@@ -418,7 +421,7 @@ object DebugLogger {
             if (cacheFile != null && cacheFile.exists()) {
                 try {
                     val cached = parseBiquoteJson(cacheFile.readText(Charsets.UTF_8))
-                    return@withContext if (interval == "1w") aggregateWeekly(cached) else cached
+                    return@withContext if (interval == "1w") aggregateWeekly(cached) else if (interval == "1M") aggregateMonthly(cached) else cached
                 } catch(e: Exception){}
             }
             return@withContext emptyList()
@@ -458,6 +461,53 @@ object DebugLogger {
         }
         list.sortBy { it.timestamp }
         return list
+    }
+
+    
+    private fun aggregateMonthly(dailyPoints: List<ChartPoint>): List<ChartPoint> {
+        if (dailyPoints.isEmpty()) return emptyList()
+        val sorted = dailyPoints.sortedBy { it.timestamp }
+        val aggregated = mutableListOf<ChartPoint>()
+        
+        var currentMonthStart = 0L
+        var monthOpen = 0.0
+        var monthHigh = 0.0
+        var monthLow = Double.MAX_VALUE
+        var monthClose = 0.0
+        
+        val cal = java.util.Calendar.getInstance()
+        cal.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        
+        for (pt in sorted) {
+            val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
+            cal.timeInMillis = tMillis
+            
+            cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+            cal.set(java.util.Calendar.HOUR_OF_DAY, 0)
+            cal.set(java.util.Calendar.MINUTE, 0)
+            cal.set(java.util.Calendar.SECOND, 0)
+            cal.set(java.util.Calendar.MILLISECOND, 0)
+            val monthStart = cal.timeInMillis // keep in millis
+            
+            if (currentMonthStart == 0L || monthStart != currentMonthStart) {
+                if (currentMonthStart != 0L) {
+                    aggregated.add(ChartPoint(currentMonthStart, monthClose, monthOpen, monthHigh, monthLow, true))
+                }
+                currentMonthStart = monthStart
+                monthOpen = pt.open
+                monthHigh = pt.high
+                monthLow = pt.low
+                monthClose = pt.price
+            } else {
+                monthHigh = maxOf(monthHigh, pt.high)
+                monthLow = minOf(monthLow, pt.low)
+                monthClose = pt.price
+            }
+        }
+        if (currentMonthStart != 0L) {
+            aggregated.add(ChartPoint(currentMonthStart, monthClose, monthOpen, monthHigh, monthLow, true))
+        }
+        return aggregated
     }
 
     private fun aggregateWeekly(dailyPoints: List<ChartPoint>): List<ChartPoint> {
