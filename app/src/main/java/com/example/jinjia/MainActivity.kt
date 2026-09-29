@@ -753,6 +753,38 @@ class MainActivity : AppCompatActivity() {
     /**
      * 核心功能：主看板复制走势给 AI 分析
      */
+    private fun copyAiAnalysisPromptForItem(item: GoldItem, preloadedPoints: List<ChartPoint>?) {
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                withContext(Dispatchers.Main) { Toast.makeText(this@MainActivity, "⏳ 正在为【${item.displayName}】构建全维度数据...", Toast.LENGTH_SHORT).show() }
+                val londonMonthlyJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", "1M") }
+                val dxyMonthlyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "1M") }
+                val londonDailyJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", "1d") }
+                val dxyDailyJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "1d") }
+                val londonRtJob = async { GoldRepository.fetchBiquoteOHLC("XAUUSD", "5m") }
+                val dxyRtJob = async { GoldRepository.fetchBiquoteOHLC("DXY", "5m") }
+                val targetRtJob = async { if (!preloadedPoints.isNullOrEmpty()) preloadedPoints else GoldRepository.fetchIntradayChart(item.id) }
+
+                val promptText = buildMegaAiPrompt(
+                    item = item,
+                    londonMonthly = londonMonthlyJob.await(),
+                    dxyMonthly = dxyMonthlyJob.await(),
+                    londonDaily = londonDailyJob.await(),
+                    dxyDaily = dxyDailyJob.await(),
+                    londonRt = londonRtJob.await(),
+                    dxyRt = dxyRtJob.await(),
+                    targetRt = targetRtJob.await()
+                )
+                withContext(Dispatchers.Main) {
+                    val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("Gold AI Analysis Prompt", promptText)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(this@MainActivity, "已生成【${item.displayName}】全维度专业提示词！", Toast.LENGTH_LONG).show()
+                }
+            } catch (t: Throwable) {}
+        }
+    }
+
     private fun copyAiAnalysisPrompt() {
         val item = selectedTargetItem ?: allTargetsList.firstOrNull() ?: return
         binding.btnCopyAiPrompt.isEnabled = false
@@ -818,8 +850,7 @@ class MainActivity : AppCompatActivity() {
             val date = dateSdf.format(java.util.Date(tMillis))
             val matchDxy = sampledDxy.minByOrNull { kotlin.math.abs(it.timestamp - pt.timestamp) }
             val dxyPriceStr = if (matchDxy != null) String.format("%.2f", matchDxy.price) else "N/A"
-            sb.append("- $date: 黄金[开$${String.format("%.2f", pt.open)} 高$${String.format("%.2f", pt.high)} 低$${String.format("%.2f", pt.low)} 收$${String.format("%.2f", pt.price)}] | 美指[收$dxyPriceStr]
-")
+            sb.append("- $date: 黄金[开$${String.format("%.2f", pt.open)} 高$${String.format("%.2f", pt.high)} 低$${String.format("%.2f", pt.low)} 收$${String.format("%.2f", pt.price)}] | 美指[收$dxyPriceStr]\n")
         }
         return sb.toString().trimEnd()
     }
@@ -839,8 +870,7 @@ class MainActivity : AppCompatActivity() {
         val timeSdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
         sampledRt.forEach { pt ->
             val tMillis = if (pt.timestamp < 100_000_000_000L) pt.timestamp * 1000L else pt.timestamp
-            rtSb.append("- ${timeSdf.format(java.util.Date(tMillis))}: ${String.format("%.2f", pt.price)}
-")
+            rtSb.append("- ${timeSdf.format(java.util.Date(tMillis))}: ${String.format("%.2f", pt.price)}\n")
         }
         
         val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
