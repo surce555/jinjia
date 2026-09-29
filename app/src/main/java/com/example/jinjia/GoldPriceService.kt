@@ -367,29 +367,417 @@ class GoldPriceService : Service() {
             }
         }
 
-                // 1. 全局配置告警状态机 (Multi-monitor Check)
-        for (item in allItems) {
-            checkAndTriggerAlerts(item)
-            
-            val now = System.currentTimeMillis()
-            val lastData = lastPricesForSpike[item.id]
-            if (lastData != null) {
-                val (lastPrice, lastTime) = lastData
-                val timeDiffMins = (now - lastTime) / 60000.0
-                if (timeDiffMins <= 30) { 
-                    val changePercent = Math.abs(item.price - lastPrice) / lastPrice
-                    if (changePercent > 0.005) { 
-                        val dir = if (item.price > lastPrice) "急涨" else "急跌"
-                        val msg = "⚠️ ${item.displayName} 出现短线异动$dir! (30分钟振幅超0.5%) 当前: ${item.price}"
-                        sendNotification(item.id.hashCode() + 1000, "异动警报", msg)
-                        lastPricesForSpike[item.id] = Pair(item.price, now) 
+        // 1. AlarmManager 定时精准唤醒（使用系统最高优先级 setAlarmClock 穿透 Doze 休眠）
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = ACTION_TEST_NOTIFICATION
+                putExtra(EXTRA_TEST_MODE, modeDesc)
+            }
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(this, 1003, intent, flags)
+            } else {
+                PendingIntent.getService(this, 1003, intent, flags)
+            }
+
+            scheduleAlarmWithAlarmClock(delayMs, pendingIntent)
+            Log.i(TAG, "Test notification alarm scheduled after $delayMs ms ($modeDesc)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "scheduleTestAlarm error: ${t.message}")
+        }
+
+        // 2. 协程并发双保险（在持有 WakeLock 下，即使熄屏 CPU 也不休眠，准时触发）
+        testJob = serviceScope.launch {
+            delay(delayMs)
+            sendTestNotification(modeDesc)
+        }
+    }
+
+    private fun cancelTestAlarm() {
+        try {
+            test30sWakeLock?.let { if (it.isHeld) it.release() }
+            test30sWakeLock = null
+        } catch (_: Throwable) {}
+
+        try {
+            val intent = Intent(this, GoldPriceService::class.java).apply {
+                action = ACTION_TEST_NOTIFICATION
+            }
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val pendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                PendingIntent.getForegroundService(this, 1003, intent, flags)
+            } else {
+                PendingIntent.getService(this, 1003, intent, flags)
+            }
+            alarmManager.cancel(pendingIntent)
+        } catch (_: Throwable) {}
+    }
+
+    /**
+     * 发送隐藏测试通知（支持硬件级强力振动直出，彻底静音关闭声音，穿透小米 HyperOS 锁屏）
+     */
+    private fun sendTestNotification(modeDesc: String) {
+        // 释放 30s 唤醒锁
+        try {
+            test30sWakeLock?.let { if (it.isHeld) it.release() }
+            test30sWakeLock = null
+        } catch (_: Throwable) {}
+
+        // 1. 唤醒屏幕
+        wakeUpScreen()
+
+        // 2. 触发系统级硬件强力振动直出（关闭声音，纯振动穿透）
+        playAlertVibrationOnly()
+
+        // 3. 构建最高优先级通知 (纯振动，静音)
+        val pendingIntent = createContentPendingIntent()
+
+        val testNotification = NotificationCompat.Builder(this, CHANNEL_ALERT_ID)
+            .setSmallIcon(R.drawable.ic_gold)
+            .setContentTitle("【金价盯盘】锁屏测试通知到达！")
+            .setContentText("触发模式: $modeDesc 延迟推送。手机锁屏与后台休眠唤醒测试成功！(纯振动)")
+            .setStyle(
+                NotificationCompat.BigTextStyle()
+                    .bigText("【金价盯盘】锁屏通知测试成功！\n触发模式: $modeDesc 延迟推送（纯振动模式）。\n当前应用在手机锁屏/Doze 休眠状态下成功唤醒 CPU 并送达通知！\n\n提示：若屏幕未亮或通知被折叠，请在小米系统设置中开启本应用的【锁屏通知】与【后台弹出界面】权限。")
+            )
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setAutoCancel(true)
+            .setSound(null)
+            .setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            .setVibrate(longArrayOf(0, 800, 300, 800, 300, 800))
+            .setFullScreenIntent(pendingIntent, true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        notificationManager.notify(NOTIFICATION_TEST_ID, testNotification)
+        Log.i(TAG, "Test notification dispatched ($modeDesc, vibration only)")
+    }
+
+    /**
+     * 适配 Android 6+ 至 14+ 的系统级 AlarmClock 精准闹钟调度
+     * AlarmClockInfo 享有系统最高优先级，不受 Doze 深度休眠限制，到点准时唤醒 CPU
+     */
+    private fun scheduleSafeAlarm() {
+        try {
+            val intervalMs = if (isAppInForeground) FOREGROUND_INTERVAL_MS else BACKGROUND_INTERVAL_MS
+            val pendingIntent = getPollPendingIntent()
+
+            scheduleAlarmWithAlarmClock(intervalMs, pendingIntent)
+            Log.i(TAG, "Safe alarm scheduled after ${intervalMs / 1000}s (foreground=$isAppInForeground)")
+        } catch (t: Throwable) {
+            Log.w(TAG, "scheduleSafeAlarm skipped: ${t.message}")
+        }
+    }
+
+    private fun scheduleAlarmWithAlarmClock(delayMs: Long, pendingIntent: PendingIntent) {
+        val showIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            },
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE else PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val triggerAtWallClock = System.currentTimeMillis() + delayMs
+        val triggerAtElapsed = SystemClock.elapsedRealtime() + delayMs
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                val clockInfo = AlarmManager.AlarmClockInfo(triggerAtWallClock, showIntent)
+                alarmManager.setAlarmClock(clockInfo, pendingIntent)
+                Log.i(TAG, "setAlarmClock scheduled successfully: delay=${delayMs}ms")
+                return
+            } catch (t: Throwable) {
+                Log.w(TAG, "setAlarmClock failed, falling back to exact idle: ${t.message}")
+            }
+        }
+
+        scheduleExactOrAllowWhileIdle(triggerAtElapsed, pendingIntent)
+    }
+
+    private fun scheduleExactOrAllowWhileIdle(triggerAtMillis: Long, pendingIntent: PendingIntent) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            if (alarmManager.canScheduleExactAlarms()) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            } else {
+                alarmManager.setAndAllowWhileIdle(
+                    AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMillis,
+                    pendingIntent
+                )
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            alarmManager.setAndAllowWhileIdle(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            )
+        } else {
+            alarmManager.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAtMillis,
+                pendingIntent
+            )
+        }
+    }
+
+    private fun cancelAlarm() {
+        try {
+            alarmManager.cancel(getPollPendingIntent())
+        } catch (t: Throwable) {
+            Log.w(TAG, "cancelAlarm error: ${t.message}")
+        }
+    }
+
+    private fun getPollPendingIntent(): PendingIntent {
+        val intent = Intent(this, GoldPriceService::class.java).apply {
+            action = ACTION_POLL
+        }
+        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            PendingIntent.getForegroundService(this, 1002, intent, flags)
+        } else {
+            PendingIntent.getService(this, 1002, intent, flags)
+        }
+    }
+
+    /**
+     * 核心网络拉取与指定标的预警比对
+     * 针对锁屏深睡唤醒提供网络重试机制（防止基带休眠未就绪抛出异常）
+     */
+    private suspend fun fetchPriceAndEvaluate() {
+        val wakeLock = try {
+            powerManager.newWakeLock(
+                PowerManager.PARTIAL_WAKE_LOCK,
+                "Jinjia:NetworkWakeLock"
+            ).apply { acquire(45_000L) }
+        } catch (_: Throwable) {
+            null
+        }
+
+        try {
+            var retryCount = 0
+            var success = false
+            while (retryCount < 3 && !success) {
+                try {
+                    if (targetId.startsWith("realtime_")) {
+                        val bankCode = targetId.removePrefix("realtime_")
+                        val item = GoldRepository.fetchRealtimeBank(bankCode)
+                        if (item != null) {
+                            handleSingleItemUpdate(item)
+                            success = true
+                        } else {
+                            retryCount++
+                            if (retryCount < 3) delay(1500L)
+                        }
+                    } else {
+                        val (allItems, jsonString) = GoldRepository.fetchGoldData()
+                        if (allItems.isNotEmpty()) {
+                            handleParsedData(allItems, jsonString)
+                            success = true
+                        } else {
+                            retryCount++
+                            if (retryCount < 3) delay(1500L)
+                        }
                     }
-                } else {
-                    lastPricesForSpike[item.id] = Pair(item.price, now)
+                } catch (e: Exception) {
+                    retryCount++
+                    Log.w(TAG, "Network attempt $retryCount failed: ${e.message}")
+                    if (retryCount < 3) {
+                        delay(1500L)
+                    } else {
+                        throw e
+                    }
+                }
+            }
+
+            if (!success) {
+                handleFetchError("机构【$targetTitle】响应超时")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Fetch failed after retries: ${t.message}", t)
+            handleFetchError(t.message ?: t.javaClass.simpleName)
+        } finally {
+            try {
+                if (wakeLock?.isHeld == true) wakeLock.release()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * 评估是否触发跌破预警（支持首次跌破、深跌追加告警与长周期防漏看）
+     */
+    
+    private fun checkAndTriggerAlerts(item: GoldItem) {
+        val configs = getActiveMonitors()
+        val cfg = configs[item.id] ?: return
+        val state = alertStates.getOrPut(item.id) { AlertState() }
+        val now = System.currentTimeMillis()
+        
+        // Check High
+        if (cfg.high > 0 && item.price >= cfg.high) {
+            if (!state.hasAlertedHigh || (now - state.lastAlertTime > 30 * 60 * 1000L)) {
+                sendAlertNotification(item.displayName, item.price, cfg.high, item.unit, "上涨突破")
+                state.hasAlertedHigh = true
+                state.hasAlertedLow = false
+                state.lastAlertTime = now
+            }
+        } else if (cfg.high > 0 && item.price < cfg.high * 0.998) {
+            state.hasAlertedHigh = false // reset if it falls back down significantly
+        }
+        
+        // Check Low
+        if (cfg.low > 0 && item.price <= cfg.low) {
+            if (!state.hasAlertedLow || (now - state.lastAlertTime > 30 * 60 * 1000L)) {
+                sendAlertNotification(item.displayName, item.price, cfg.low, item.unit, "下跌跌破")
+                state.hasAlertedLow = true
+                state.hasAlertedHigh = false
+                state.lastAlertTime = now
+            }
+        } else if (cfg.low > 0 && item.price > cfg.low * 1.002) {
+            state.hasAlertedLow = false // reset if it bounces back up
+        }
+    }
+
+    private fun shouldTriggerAlertOld(currentPrice: Double, threshold: Double): Boolean {
+        if (threshold <= 0 || currentPrice <= 0) return false
+        if (threshold == THRESHOLD_TEST_30S || threshold == THRESHOLD_TEST_5M) return false
+        if (currentPrice >= threshold) {
+            hasAlerted = false
+            return false
+        }
+        val now = System.currentTimeMillis()
+        // 首次跌破阈值，立即告警
+        if (!hasAlerted) {
+            hasAlerted = true
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        // 已告警过，若价格进一步深跌 >= 1.0 元，再次触发强力振动告警
+        if (currentPrice <= lastAlertPrice - 1.0) {
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        // 或者持续处于低位且距离上次告警超过 30 分钟，再次振动提醒防漏看
+        if (now - lastAlertTime >= 30 * 60 * 1000L) {
+            lastAlertTime = now
+            lastAlertPrice = currentPrice
+            return true
+        }
+        return false
+    }
+
+    /**
+     * 单项高频实时数据更新处理
+     */
+    private fun handleSingleItemUpdate(item: GoldItem) {
+        val now = System.currentTimeMillis()
+        val lastData = lastPricesForSpike[item.id]
+        if (lastData != null) {
+            val (lastPrice, lastTime) = lastData
+            val timeDiffMins = (now - lastTime) / 60000.0
+            if (timeDiffMins <= 30) { 
+                val changePercent = Math.abs(item.price - lastPrice) / lastPrice
+                if (changePercent > 0.005) { 
+                    val dir = if (item.price > lastPrice) "急涨" else "急跌"
+                    val msg = "⚠️ ${item.displayName} 出现短线异动$dir! (30分钟振幅超0.5%) 当前: ${item.price}"
+                    sendNotification(item.id.hashCode() + 1000, "异动警报", msg)
+                    lastPricesForSpike[item.id] = Pair(item.price, now) 
                 }
             } else {
                 lastPricesForSpike[item.id] = Pair(item.price, now)
             }
+        } else {
+            lastPricesForSpike[item.id] = Pair(item.price, now)
+        }
+        
+        try {
+            com.example.jinjia.widget.GoldWidgetProvider.updateWidget(this, 
+                "N/A", item.displayName, item.price.toString())
+        } catch (e: Exception) {}
+
+        val timestamp = System.currentTimeMillis()
+        val currentPrice = item.price
+        val currentTitle = item.displayName
+        targetId = item.id
+        targetTitle = currentTitle
+
+        // 1. 边缘触发告警状态机（低于阈值推送通知）
+        checkAndTriggerAlerts(item)
+
+        // 2. 合并更新本地全量列表
+        val currentList = _monitorState.value.allItems.toMutableList()
+        val idx = currentList.indexOfFirst { it.id == item.id }
+        if (idx >= 0) {
+            currentList[idx] = item
+        } else {
+            currentList.add(0, item)
+        }
+
+        // 3. 更新状态并持久化
+        val newState = MonitorState(
+            isRunning = true,
+            targetId = targetId,
+            targetTitle = targetTitle,
+            targetPrice = currentPrice,
+            targetThreshold = targetThreshold,
+            intervalMinutes = intervalMinutes,
+            updateTime = timestamp,
+            statusMessage = "正在监控",
+            allItems = currentList
+        )
+        _monitorState.value = newState
+        val json = GoldDataParser.serializeItems(currentList)
+        saveStateToPrefs(newState, json)
+
+        // 4. 刷新前台常驻通知
+        val timeFormatted = formatTimestamp(timestamp)
+        val symbol = if (item.unit.contains("美元") || item.id == "realtime_gj") "$" else "¥"
+        updatePersistentNotification(
+            priceText = "【$targetTitle】$symbol%.2f %s".format(currentPrice, item.unit),
+            detailText = "阈值: <$symbol%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
+        )
+    }
+
+    /**
+     * 综合多品类全量数据更新处理
+     */
+    private fun handleParsedData(allItems: List<GoldItem>, rawJson: String) {
+        val timestamp = System.currentTimeMillis()
+
+        // 精准匹配当前监控的目标标的
+        val targetItem = allItems.find { it.id == targetId }
+            ?: allItems.find { it.title == targetTitle }
+            ?: allItems.first()
+
+        val currentPrice = targetItem.price
+        val currentTitle = targetItem.displayName
+        targetId = targetItem.id
+        targetTitle = currentTitle
+
+        // 1. 边缘触发告警状态机
+        for (item in allItems) {
+            checkAndTriggerAlerts(item)
         }
 
         // 2. 更新状态并持久化
