@@ -1208,9 +1208,6 @@ ${rtSb.toString().trimEnd()}
         } catch(e: Exception) {
             binding.tvCurrentThreshold.text = "未设置"
         }
-        } else {
-            binding.tvCurrentThreshold.text = "未设置"
-        }
         binding.tvCurrentInterval.text = "前台1m / 后台5m"
 
         // 5. 更新时间

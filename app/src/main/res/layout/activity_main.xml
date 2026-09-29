@@ -450,27 +450,41 @@
                     android:orientation="horizontal">
 
                     <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/tilThreshold"
+                        android:id="@+id/tilHighThreshold"
                         style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:hint="预警阈值(元/克)"
-                        app:boxCornerRadiusBottomEnd="14dp"
-                        app:boxCornerRadiusBottomStart="14dp"
-                        app:boxCornerRadiusTopEnd="14dp"
-                        app:boxCornerRadiusTopStart="14dp"
-                        app:boxStrokeColor="@color/gold_primary"
-                        app:hintTextColor="@color/gold_primary_dark">
-
+                        android:hint="高阈值(高于)"
+                        app:endIconMode="clear"
+                        app:helperText="涨破此值即告警">
                         <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etThreshold"
+                            android:id="@+id/etHighThreshold"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
                             android:inputType="numberDecimal"
-                            android:singleLine="true"
-                            android:text="930.00"
-                            android:textColor="@color/text_primary" />
+                            android:maxLines="1" />
+                    </com.google.android.material.textfield.TextInputLayout>
+
+                    <Space
+                        android:layout_width="8dp"
+                        android:layout_height="wrap_content" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        android:id="@+id/tilLowThreshold"
+                        style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:hint="低阈值(低于)"
+                        app:endIconMode="clear"
+                        app:helperText="跌破此值即告警">
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/etLowThreshold"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="numberDecimal"
+                            android:maxLines="1" />
                     </com.google.android.material.textfield.TextInputLayout>
 
                     <LinearLayout
