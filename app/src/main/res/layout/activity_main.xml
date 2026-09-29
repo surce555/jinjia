@@ -457,21 +457,45 @@
                     </LinearLayout>
                 </LinearLayout>
 
-                <!-- 核心 AI 辅助功能：一键复制走势给 AI 分析 -->
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnCopyAiPrompt"
+                <!-- 核心工具：AI分析与盈亏计算 -->
+                <LinearLayout
                     android:layout_width="match_parent"
-                    android:layout_height="50dp"
+                    android:layout_height="wrap_content"
                     android:layout_marginTop="16dp"
-                    android:backgroundTint="@color/ai_btn_bg"
-                    android:text="🤖 复制走势给 AI 分析"
-                    android:textColor="@color/white"
-                    android:textSize="14sp"
-                    android:textStyle="bold"
-                    app:cornerRadius="25dp"
-                    app:elevation="2dp"
-                    app:iconGravity="textStart"
-                    app:rippleColor="#33FFFFFF" />
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnCopyAiPrompt"
+                        android:layout_width="0dp"
+                        android:layout_height="50dp"
+                        android:layout_weight="1"
+                        android:backgroundTint="@color/ai_btn_bg"
+                        android:text="🤖 AI 深度分析"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="25dp"
+                        app:elevation="2dp"
+                        app:rippleColor="#33FFFFFF" />
+
+                    <Space
+                        android:layout_width="12dp"
+                        android:layout_height="wrap_content" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnProfitCalculator"
+                        android:layout_width="0dp"
+                        android:layout_height="50dp"
+                        android:layout_weight="1"
+                        android:backgroundTint="@color/gold_primary"
+                        android:text="💰 盈亏模拟计算"
+                        android:textColor="@color/white"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        app:cornerRadius="25dp"
+                        app:elevation="2dp"
+                        app:rippleColor="#33FFFFFF" />
+                </LinearLayout>
 
                 <!-- 操作按钮组（胶囊药丸按钮设计） -->
                 <LinearLayout
