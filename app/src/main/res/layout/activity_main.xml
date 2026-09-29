@@ -355,7 +355,52 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <!-- 监控设置与 AI 辅助分析核心操作卡片 (22dp 毛玻璃) -->
+
+        <!-- Feature 4: 宏观核弹数据日历 -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/cardMacroCalendar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            app:cardBackgroundColor="@color/card_background"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="3dp"
+            app:strokeColor="@color/card_stroke"
+            app:strokeWidth="1dp">
+            
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:padding="16dp">
+                
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="📅 宏观数据预警"
+                    android:textColor="@color/text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+                    
+                <Space
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1" />
+                    
+                <TextView
+                    android:id="@+id/tvMacroEvent"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="计算中..."
+                    android:textColor="#EF4444"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <!-- 监控设置与 AI 辅助分析核心操作卡片 -->
+
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/cardControl"
             android:layout_width="match_parent"

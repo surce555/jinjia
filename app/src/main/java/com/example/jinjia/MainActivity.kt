@@ -107,6 +107,7 @@ class MainActivity : AppCompatActivity() {
             initRecyclerView()
             initIntervalSpinner()
             initTabs()
+        updateMacroCalendar()
             initViews()
 
             // 预填充 Spinner，默认选中首项
@@ -515,7 +516,33 @@ class MainActivity : AppCompatActivity() {
         binding.spInterval.setSelection(defaultIdx)
     }
 
-    private fun initTabs() {
+    private fun updateMacroCalendar() {
+        // Find next Non-Farm Payrolls (NFP) - Usually 1st Friday of the month
+        val cal = java.util.Calendar.getInstance()
+        val now = cal.timeInMillis
+        cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+        while (cal.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.FRIDAY) {
+            cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
+        }
+        cal.set(java.util.Calendar.HOUR_OF_DAY, 20)
+        cal.set(java.util.Calendar.MINUTE, 30)
+        cal.set(java.util.Calendar.SECOND, 0)
+        
+        if (cal.timeInMillis < now) {
+            cal.add(java.util.Calendar.MONTH, 1)
+            cal.set(java.util.Calendar.DAY_OF_MONTH, 1)
+            while (cal.get(java.util.Calendar.DAY_OF_WEEK) != java.util.Calendar.FRIDAY) {
+                cal.add(java.util.Calendar.DAY_OF_MONTH, 1)
+            }
+        }
+        
+        val diffDays = (cal.timeInMillis - now) / (1000 * 60 * 60 * 24)
+        val eventStr = if (diffDays == 0L) "🔥大非农 今晚20:30公布!" else "距大非农还有 $diffDays 天"
+        binding.tvMacroEvent.text = eventStr
+    }
+
+    private fun initTabs()
+        updateMacroCalendar() {
         val sp = getSharedPreferences(GoldPriceService.PREFS_NAME, Context.MODE_PRIVATE)
         binding.tabLayout.removeAllTabs()
 
@@ -569,6 +596,15 @@ class MainActivity : AppCompatActivity() {
         // 核心 AI 辅助分析：一键复制走势给 AI 分析
         binding.btnCopyAiPrompt.setOnClickListener {
             copyAiAnalysisPrompt()
+        }
+
+        binding.btnProfitCalculator.setOnClickListener {
+            val target = selectedTargetItem ?: allTargetsList.firstOrNull()
+            if (target != null) {
+                com.example.jinjia.ui.ProfitCalculatorDialog(this, target).show()
+            } else {
+                Toast.makeText(this, "请先选择盯盘标的", Toast.LENGTH_SHORT).show()
+            }
         }
 
         binding.btnCopyAiPrompt.setOnLongClickListener {
@@ -995,6 +1031,7 @@ ${rtSb.toString().trimEnd()}
 
             // 即时刷新 UI
             initTabs()
+        updateMacroCalendar()
             updateTargetSpinner()
             filterAndDisplayList()
             fetchGoldDataImmediately()

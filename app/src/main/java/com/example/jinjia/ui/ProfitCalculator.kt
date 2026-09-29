@@ -74,7 +74,19 @@ class ProfitCalculatorDialog(private val context: Context, private val currentIt
         binding.rvPositions.adapter = adapter
         
         binding.etExpectedPrice.setText(String.format("%.2f", currentItem.price))
+        
         binding.etExpectedPrice.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) { calculateSummary() }
+        })
+        binding.etSpread.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) { calculateSummary() }
+        })
+        // dummy text watcher to replace old one
+        val dummy = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
@@ -164,6 +176,7 @@ class ProfitCalculatorDialog(private val context: Context, private val currentIt
     private fun calculateSummary() {
         val expectedPriceStr = binding.etExpectedPrice.text.toString()
         val currentPrice = expectedPriceStr.toDoubleOrNull() ?: currentItem.price
+        val spread = binding.etSpread.text.toString().toDoubleOrNull() ?: 0.0
         
         var totalAmount = 0.0
         var totalCost = 0.0
@@ -175,11 +188,13 @@ class ProfitCalculatorDialog(private val context: Context, private val currentIt
         
         if (totalAmount > 0) {
             val avgPrice = totalCost / totalAmount
-            val marketValue = totalAmount * currentPrice
+            val avgPrice = totalCost / totalAmount
+            val realBreakEven = avgPrice + spread
+            val marketValue = totalAmount * (currentPrice - spread)
             val profitAmount = marketValue - totalCost
             val profitRate = (profitAmount / totalCost) * 100
             
-            binding.tvAvgPrice.text = String.format("%.2f", avgPrice)
+            binding.tvAvgPrice.text = String.format("%.2f (保本:%.2f)", avgPrice, realBreakEven)
             binding.tvTotalAmount.text = String.format("%.2f", totalAmount)
             binding.tvTotalCost.text = String.format("%.2f", totalCost)
             binding.tvMarketValue.text = String.format("%.2f", marketValue)
