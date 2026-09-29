@@ -797,11 +797,24 @@ class GoldPriceService : Service() {
 
         // 3. 刷新前台常驻通知
         val timeFormatted = formatTimestamp(timestamp)
-        val symbol = if (targetItem.unit.contains("美元") || targetItem.id == "realtime_gj") "$" else "¥"
-        updatePersistentNotification(
-            priceText = "【$targetTitle】$symbol%.2f %s".format(currentPrice, targetItem.unit),
-            detailText = "阈值: <$symbol%.2f | 间隔: %.1fm (%s)".format(targetThreshold, intervalMinutes, timeFormatted)
-        )
+        val activeMonitors = getActiveMonitors()
+        if (activeMonitors.size > 1) {
+            val monitorsText = activeMonitors.entries.take(3).joinToString(", ") { (id, cfg) ->
+                val price = allItems.find { it.id == id }?.price ?: 0.0
+                "${cfg.title}:$price"
+            } + if (activeMonitors.size > 3) "等" else ""
+            
+            updatePersistentNotification(
+                priceText = "多目标 (${activeMonitors.size}个)",
+                detailText = "${monitorsText} | 刷新: ${timeFormatted}"
+            )
+        } else {
+            val symbol = if (targetItem.unit.contains("美元") || targetItem.id == "realtime_gj") "$" else "¥"
+            updatePersistentNotification(
+                priceText = "【$targetTitle】$symbol%.2f %s".format(currentPrice, targetItem.unit),
+                detailText = "间隔: %.1fm (%s)".format(intervalMinutes, timeFormatted)
+            )
+        }
     }
 
     private fun handleFetchError(errorMsg: String) {
